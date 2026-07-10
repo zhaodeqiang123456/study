@@ -121,7 +121,7 @@ func (s *Server) handleGetResult(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(task)
 }
 
-func main() {
+func Service() {
 	store := NewTaskStore()
 	service := &Server{store: store}
 
