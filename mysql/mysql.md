@@ -66,3 +66,81 @@ DELETE FROM tasks WHERE id = 'task-002';
 2. 连接数据库 db, err := sql.Open("mysql", "用户名:密码@tcp(IP:端口号)/数据库")
 3. CRUD操作   _, err = db.Exec("INSERT INTO tasks (id, status, result, created_at) VALUES (?, ?, ?, NOW())", x, y, z)
 
+---
+### sql进阶
+#### 多表关联  JOIN
+
+```
+# inner join 只保留能匹配的行
+
+SELECT t.id, t.status, l.log_msg
+FROM tasks t
+INNER JOIN task_logs l ON t.id = l.task_id;
+
+
+# left join 保留左表全部行，右表匹配不上的字段则填null
+
+SELECT t.id, t.status, l.log_msg
+FROM tasks t
+LEFT JOIN task_logs l ON t.id = l.task_id;
+
+```
+#### 聚合与分组  group by
+```
+# 统计各status组COUNT(*)
+SELECT status, COUNT(*) AS cnt
+FROM tasks
+GROUP BY status; 
+
+# 约束, having
+SELECT status, COUNT(*) AS cnt
+FROM tasks
+GROUP BY status
+HAVING cnt > 1;
+
+
+# order by排序，以及输出限制 limit
+SELECT status, COUNT(*) AS cnt
+FROM tasks
+GROUP BY status
+ORDER BY cnt DESC
+LIMIT 3;
+
+
+# 子查询，嵌套查询
+SELECT * FROM tasks
+WHERE created_at = (SELECT MAX(created_at) FROM task_logs);
+```
+
+#### 索引与执行计划
+
+```
+# 创建索引
+-- 为 tasks 表的 status 字段创建普通索引
+CREATE INDEX idx_status ON tasks(status);
+
+-- 为 task_logs 表的 task_id 创建索引（常用于关联查询）
+CREATE INDEX idx_task_id ON task_logs(task_id);
+
+# explain 查看执行计划，分析查询效率
+type 表示查询的方式， const 主键或者唯一索引查询， ref 普通索引查询， all 全表扫描
+key 表示实际查询使用的索引 null表示此次查询未用索引
+
+```
+
+#### 重点总结
+##### 查询进阶
+1. order by 排序
+2. limit 分页处理
+3. as 设置别名，简化表和字段名称
+4. join 连接查询
+5. count(), sum(), avg(), max(), min(), 聚合函数 通常搭配group by做分组统计
+
+##### 索引 优化查询效率
+常用索引类型
+1. primary key  主键索引，唯一且非空
+2. unique 唯一索引，值不能重复
+3. index 普通索引，只为加速查询
+4. fulltext  全文索引，用于文本搜索
+执行计划 explain 查看MySQL如何执行查询，用于sql优化
+

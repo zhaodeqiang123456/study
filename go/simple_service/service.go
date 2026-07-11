@@ -111,14 +111,19 @@ func (s *Server) handleGetResult(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	task, ok := s.store.Get(id)
-	if !ok {
-		http.Error(w, "task not found", http.StatusNotFound)
+	// task, ok := s.store.Get(id)
+	// if !ok {
+	// 	http.Error(w, "task not found", http.StatusNotFound)
+	// 	return
+	// }
+	db := initDB()
+	detail, err := getTaskDetail(db, id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
 		return
 	}
-
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(task)
+	json.NewEncoder(w).Encode(detail)
 }
 
 func Service() {

@@ -17,6 +17,12 @@ const (
 	Alter
 )
 
+type TaskDetail struct {
+	ID     string   `json:"id"`
+	Status string   `json:"status"`
+	Logs   []string `json:"logs"`
+}
+
 func initDB() (db *sql.DB) {
 	var err error
 	db, err = sql.Open("mysql", "root:000922@tcp(127.0.0.1:3306)/mysql_learn")
@@ -46,14 +52,28 @@ func sql_exec(exec Exec, db *sql.DB) func(*Task) {
 	}
 }
 
-func main() {
-	db := initDB()
-	defer db.Close()
-
-	task := Task{
-		ID:     "task-go-002",
-		Status: "processing",
+func getTaskDetail(db *sql.DB, taskID string) (*TaskDetail, error) {
+	var detail TaskDetail
+	err := db.QueryRow("SELECT id, status FROM tasks WHERE id = ?", taskID).Scan(&detail.ID, &detail.Status)
+	if err != nil {
+		return nil, err
 	}
-	f := sql_exec(Insert, db)
-	f(&task)
+
+	// 2. 查关联日志（利用索引）
+	rows, err := db.Query("SELECT log_msg FROM task_logs WHERE task_id = ? ORDER BY created_at", taskID)
+
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var msg string
+		if err := rows.Scan(&msg); err != nil {
+			return nil, err
+		}
+		detail.Logs = append(detail.Logs, msg)
+	}
+
+	return &detail, rows.Err()
 }
