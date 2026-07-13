@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -63,12 +64,40 @@ func (s *TaskStore) Complete(id, result string) {
 	}
 }
 
-// Server 包含路由和任务存储
-type Server struct {
-	store *TaskStore
+// Service 改造为结构体，持有 http.Server
+type Service struct {
+	server *http.Server
+	store  *TaskStore // 或其他依赖
 }
 
-func (s *Server) handlePostTask(w http.ResponseWriter, r *http.Request) {
+func NewService(addr string) *Service {
+	store := NewTaskStore()
+	svr := &Service{store: store}
+
+	mux := http.NewServeMux() // 不要用全局默认的 http.HandleFunc
+	mux.HandleFunc("/task", svr.handlePostTask)
+	mux.HandleFunc("/result", svr.handleGetResult)
+	mux.HandleFunc("/sqlTask", svr.handleSqlTask)
+
+	return &Service{
+		server: &http.Server{
+			Addr:    addr,
+			Handler: mux,
+		},
+		store: store,
+	}
+}
+
+func (s *Service) Start() error {
+	log.Println("Server starting on", s.server.Addr)
+	return s.server.ListenAndServe()
+}
+
+func (s *Service) Shutdown(ctx context.Context) error {
+	return s.server.Shutdown(ctx)
+}
+
+func (s *Service) handlePostTask(w http.ResponseWriter, r *http.Request) {
 
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -99,7 +128,7 @@ func (s *Server) handlePostTask(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleGetResult 处理 GET /result?id=xxx 请求
-func (s *Server) handleGetResult(w http.ResponseWriter, r *http.Request) {
+func (s *Service) handleGetResult(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -116,8 +145,7 @@ func (s *Server) handleGetResult(w http.ResponseWriter, r *http.Request) {
 	// 	http.Error(w, "task not found", http.StatusNotFound)
 	// 	return
 	// }
-	db := initDB()
-	detail, err := getTaskDetail(db, id)
+	detail, err := inst.dbS.getTaskDetail(id)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
@@ -126,16 +154,15 @@ func (s *Server) handleGetResult(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(detail)
 }
 
-func Service() {
-	store := NewTaskStore()
-	service := &Server{store: store}
+func (s *Service) handleSqlTask(w http.ResponseWriter, r *http.Request) {
 
-	http.HandleFunc("/task", service.handlePostTask)
-	http.HandleFunc("/result", service.handleGetResult)
-
-	log.Println("Server starting on :8080")
-	if err := http.ListenAndServe(":8080", nil); err != nil {
-		log.Fatal(err)
+	taskID := "task-002"
+	err := inst.dbS.completeTaskWithLog(taskID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	} else {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode("任务已自动完成")
 	}
-
 }

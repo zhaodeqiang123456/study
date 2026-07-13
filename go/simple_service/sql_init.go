@@ -37,7 +37,6 @@ func (dbS *dbService) initDB() {
 		log.Fatal("无法连接到数据库:", err)
 	}
 	fmt.Println("数据库连接成功！")
-	return
 }
 
 func (dbS *dbService) sql_exec(exec Exec) func(*Task) {
