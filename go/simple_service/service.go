@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"sync"
 	"time"
+
+	"github.com/redis/go-redis/v9"
 )
 
 type TaskStatus string // 重新声明字符串类型, 使其语义更明确
@@ -68,24 +70,44 @@ func (s *TaskStore) Complete(id, result string) {
 type Service struct {
 	server *http.Server
 	store  *TaskStore // 或其他依赖
+	rdb    *redis.Client
+}
+
+// 初始化 Redis 客户端
+func NewRedisClient() *redis.Client {
+	rdb := redis.NewClient(&redis.Options{
+		Addr:     "localhost:6379",
+		Password: "", // 如果有密码就填
+		DB:       0,
+	})
+	// 测试连接
+	_, err := rdb.Ping(context.Background()).Result()
+	if err != nil {
+		log.Fatalf("连接 Redis 失败: %v", err)
+	}
+	log.Println("Redis 连接成功")
+	return rdb
 }
 
 func NewService(addr string) *Service {
 	store := NewTaskStore()
-	svr := &Service{store: store}
+	rdb := NewRedisClient()
+	svc := &Service{
+		store: store,
+		rdb:   rdb,
+	}
 
 	mux := http.NewServeMux() // 不要用全局默认的 http.HandleFunc
-	mux.HandleFunc("/task", svr.handlePostTask)
-	mux.HandleFunc("/result", svr.handleGetResult)
-	mux.HandleFunc("/sqlTask", svr.handleSqlTask)
+	mux.HandleFunc("/task", svc.handlePostTask)
+	mux.HandleFunc("/result", svc.handleGetResult)
+	mux.HandleFunc("/sqlTask", svc.handleSqlTask)
 
-	return &Service{
-		server: &http.Server{
-			Addr:    addr,
-			Handler: mux,
-		},
-		store: store,
+	svc.server = &http.Server{
+		Addr:    addr,
+		Handler: mux,
 	}
+
+	return svc
 }
 
 func (s *Service) Start() error {
@@ -135,6 +157,7 @@ func (s *Service) handleGetResult(w http.ResponseWriter, r *http.Request) {
 	}
 
 	id := r.URL.Query().Get("id")
+	log.Println("get id = ", id)
 	if id == "" {
 		http.Error(w, "missing id parameter", http.StatusBadRequest)
 		return
@@ -145,13 +168,25 @@ func (s *Service) handleGetResult(w http.ResponseWriter, r *http.Request) {
 	// 	http.Error(w, "task not found", http.StatusNotFound)
 	// 	return
 	// }
-	detail, err := inst.dbS.getTaskDetail(id)
+
+	// detail, err := inst.dbS.getTaskDetail(id)
+	// if err != nil {
+	// 	http.Error(w, err.Error(), http.StatusNotFound)
+	// 	return
+	// }
+	// w.Header().Set("Content-Type", "application/json")
+	// json.NewEncoder(w).Encode(detail)
+	if s.rdb == nil {
+		log.Println("FATAL: s.rdb is nil in getTaskWithCache")
+	}
+	task, err := s.getTaskWithCache(id)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(detail)
+	json.NewEncoder(w).Encode(task)
+
 }
 
 func (s *Service) handleSqlTask(w http.ResponseWriter, r *http.Request) {
@@ -165,4 +200,30 @@ func (s *Service) handleSqlTask(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode("任务已自动完成")
 	}
+}
+
+func (s *Service) getTaskWithCache(taskID string) (*Task, error) {
+
+	var ctx = context.Background()
+	// 1. 尝试从 Redis 读取
+	cached, err := s.rdb.Get(ctx, "task:"+taskID).Result()
+	var task Task
+	if err == nil {
+		log.Println("get cache successfully")
+		// 缓存命中，直接反序列化返回
+		json.Unmarshal([]byte(cached), &task)
+		return &task, nil
+	}
+	log.Println("get cache fail, try to get task from sql")
+	// 2. 缓存未命中，查 MySQL
+	err = inst.dbS.db.QueryRow("select id, status, result from tasks where id = ?", taskID).Scan(&task.ID, &task.Status, &task.Result)
+	if err != nil {
+		return nil, err
+	}
+
+	// 3. 回写 Redis，设置 30s 过期
+	taskJSON, _ := json.Marshal(task)
+	s.rdb.Set(ctx, "task:"+taskID, taskJSON, 30*time.Second)
+
+	return &task, nil
 }
