@@ -3,74 +3,21 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log"
 	"net/http"
-	"sync"
+	"simple_service/pkg"
 	"time"
 
 	"github.com/redis/go-redis/v9"
+	"github.com/segmentio/kafka-go"
 )
-
-type TaskStatus string // 重新声明字符串类型, 使其语义更明确
-
-const (
-	StatusPending TaskStatus = "pending" // 任务状态为待解决
-	StatusDone    TaskStatus = "done"    // 任务状态为已解决
-)
-
-type Task struct {
-	ID     string     `json:"id"` // tag标签规范, 在做类型转换时发挥作用
-	Status TaskStatus `json:"status"`
-	Result string     `json:"result,omitempty"`
-}
-
-type TaskStore struct { // 一个任务仓库, 存储了所有任务的向量（任务的存储实际地址）
-	mu    sync.RWMutex // 一个读写互斥信号量, 以保证线程互斥访问的安全性
-	tasks map[string]*Task
-}
-
-func NewTaskStore() *TaskStore { // 新建一个任务存储仓库
-	return &TaskStore{
-		tasks: make(map[string]*Task), // mu 如果未初始化则默认为0，即当前处于解锁状态
-	}
-}
-
-func (s *TaskStore) Create() string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	id := fmt.Sprintf("%d-%d", time.Now().UnixNano(), len(s.tasks))
-
-	s.tasks[id] = &Task{
-		ID:     id,
-		Status: StatusPending,
-	}
-
-	return id
-}
-
-func (s *TaskStore) Get(id string) (t *Task, ok bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	t, ok = s.tasks[id]
-	return
-}
-
-func (s *TaskStore) Complete(id, result string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if t, ok := s.tasks[id]; ok {
-		t.Status = StatusDone
-		t.Result = result
-	}
-}
 
 // Service 改造为结构体，持有 http.Server
 type Service struct {
-	server *http.Server
-	store  *TaskStore // 或其他依赖
-	rdb    *redis.Client
+	server      *http.Server
+	store       *pkg.TaskStore // 或其他依赖
+	rdb         *redis.Client
+	kafkaWriter *kafka.Writer
 }
 
 // 初始化 Redis 客户端
@@ -90,11 +37,17 @@ func NewRedisClient() *redis.Client {
 }
 
 func NewService(addr string) *Service {
-	store := NewTaskStore()
+	store := pkg.NewTaskStore()
 	rdb := NewRedisClient()
+	kw := &kafka.Writer{
+		Addr:     kafka.TCP("localhost:9092"),
+		Topic:    "task-queue",
+		Balancer: &kafka.LeastBytes{}, // 最简单的分区策略
+	}
 	svc := &Service{
-		store: store,
-		rdb:   rdb,
+		store:       store,
+		rdb:         rdb,
+		kafkaWriter: kw,
 	}
 
 	mux := http.NewServeMux() // 不要用全局默认的 http.HandleFunc
@@ -126,24 +79,42 @@ func (s *Service) handlePostTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	id := s.store.Create()
+	taskID := "task-001"
+	task := pkg.Task{
+		ID:     taskID,
+		Status: "pending",
+	}
 
-	go func(taskID string) {
+	msgBytes, _ := json.Marshal(task)
 
-		// 模拟耗时处理（比如调用模型推理）
-		time.Sleep(3 * time.Second) // 用 sleep 模拟实际工作
+	err := s.kafkaWriter.WriteMessages(r.Context(), kafka.Message{
+		Key:   []byte(taskID),
+		Value: msgBytes,
+	})
 
-		result := fmt.Sprintf("task %s completed successfully", taskID)
-		s.store.Complete(taskID, result)
-		log.Printf("task %s completed", taskID)
-	}(id)
+	if err != nil {
+		http.Error(w, "failed to enqueue task", http.StatusInternalServerError)
+		return
+	}
+
+	// id := s.store.Create()
+
+	// go func(taskID string) {
+
+	// 	// 模拟耗时处理（比如调用模型推理）
+	// 	time.Sleep(3 * time.Second) // 用 sleep 模拟实际工作
+
+	// 	result := fmt.Sprintf("task %s completed successfully", taskID)
+	// 	s.store.Complete(taskID, result)
+	// 	log.Printf("task %s completed", taskID)
+	// }(id)
 
 	// 立即返回响应
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
 	json.NewEncoder(w).Encode(map[string]string{
-		"id":     id,
-		"status": string(StatusPending),
+		"id":     taskID,
+		"status": string(pkg.StatusPending),
 		"msg":    "task submitted",
 	})
 
@@ -192,7 +163,7 @@ func (s *Service) handleGetResult(w http.ResponseWriter, r *http.Request) {
 func (s *Service) handleSqlTask(w http.ResponseWriter, r *http.Request) {
 
 	taskID := "task-002"
-	err := inst.dbS.completeTaskWithLog(taskID)
+	err := inst.GetDbS().CompleteTaskWithLog(taskID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
@@ -202,12 +173,12 @@ func (s *Service) handleSqlTask(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Service) getTaskWithCache(taskID string) (*Task, error) {
+func (s *Service) getTaskWithCache(taskID string) (*pkg.Task, error) {
 
 	var ctx = context.Background()
 	// 1. 尝试从 Redis 读取
 	cached, err := s.rdb.Get(ctx, "task:"+taskID).Result()
-	var task Task
+	var task pkg.Task
 	if err == nil {
 		log.Println("get cache successfully")
 		// 缓存命中，直接反序列化返回
@@ -216,7 +187,7 @@ func (s *Service) getTaskWithCache(taskID string) (*Task, error) {
 	}
 	log.Println("get cache fail, try to get task from sql")
 	// 2. 缓存未命中，查 MySQL
-	err = inst.dbS.db.QueryRow("select id, status, result from tasks where id = ?", taskID).Scan(&task.ID, &task.Status, &task.Result)
+	task, err = inst.GetDbS().GetTask(taskID)
 	if err != nil {
 		return nil, err
 	}

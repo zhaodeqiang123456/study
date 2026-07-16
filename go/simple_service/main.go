@@ -6,18 +6,19 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"simple_service/pkg"
 	"syscall"
 	"time"
 )
 
-var inst instance
+var inst pkg.Instance
 
 func main() {
 
-	inst.initInstance() //初始化资源
-	defer inst.detach()
+	inst.InitInstance() //初始化资源
+	defer inst.Detach()
 
-	srv := NewService(port) //构建服务
+	srv := NewService(pkg.Port) //构建服务
 
 	go func() {
 		if err := srv.Start(); err != nil && err != http.ErrServerClosed {
