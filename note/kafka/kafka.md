@@ -17,7 +17,6 @@
 
 成功后输出Formatting
 
-
 ##### 启动Kafka服务
 
 .\bin\windows\kafka-server-start.bat config\server.properties
@@ -27,3 +26,33 @@
 ##### 创建topic （新开一个终端）
 
 .\bin\windows\kafka-topics.bat --create --topic task-queue --bootstrap-server localhost:9092
+
+
+
+##### kafka 操作
+
+```go
+// 生产者
+import "github.com/segmentio/kafka-go"
+w := &kafka.Writer{
+    Addr:  kafka.TCP("localhost:9092"),
+    Topic: "task-queue",
+}
+w.WriteMessages(context.Background(),
+    kafka.Message{Key: []byte("task-1"), Value: []byte(`{"id":"task-1"}`)},
+)
+```
+
+
+~~~go
+// 消费者
+r := kafka.NewReader(kafka.ReaderConfig{
+    Brokers: []string{"localhost:9092"},
+    Topic:   "task-queue",
+    GroupID: "task-consumer-group",
+})
+msg, _ := r.ReadMessage(context.Background())
+fmt.Println(string(msg.Value))  // {"id":"task-1"}
+~~~
+
+**生产者端负责将消息,数据推送到Kafka服务端， 消费者端负责将数据从Kafka端拉出**
