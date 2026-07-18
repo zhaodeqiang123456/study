@@ -1,9 +1,10 @@
 # packages
-**任何**go 程序都由packages 构成 ，程序的入口在 package main 中，引入外部package的方式为import
 
+**任何**go 程序都由packages 构成 ，程序的入口在 package main 中，引入外部package的方式为import
 
 `package main # 代表程序的入口`
 `import # 用于引入package`
+
 ```go
 package main
 import (
@@ -19,7 +20,9 @@ func main() {
 ~~math.pi~~ 包的导出必须是大写字母开头  math.Pi
 
 ---
+
 # function 函数
+
 ```go
 
 #一个标准的函数声明
@@ -27,9 +30,9 @@ func fun_name(param1 T, param2 ....V) S {}
 # func 保留字，表示声明了一个函数
 # T, V, S 为参数的类型, go的参数的类型在参数的后面
 ```
-> 注意到当多个参数同属一个类型时， 可以省略写法  
-> x int, y int --> x, y int
 
+> 注意到当多个参数同属一个类型时， 可以省略写法
+> x int, y int --> x, y int
 
 ```go
 # 在go中，函数可以返回多个参数
@@ -61,10 +64,13 @@ var (
 
 func test() { k := true}
 ```
+
 > 简短变量的声明必须在函数内部，var声明可用于函数内外
 
 # Type 数据类型
+
 基本的数据类型：
+
 1. bool
 2. string
 3. int int8 int16 int32 int64 uint ....
@@ -83,10 +89,10 @@ u := uint(f) # ✔
 u := f # ❌
 ```
 
-#  Flow control 控制流
+# Flow control 控制流
 
+#### for
 
-#### for 
 ```go
 # go 的for 循环不需要"()" 包裹其组件
 # 初始化声明 ; 条件表达式; 后置语句声明
@@ -99,9 +105,11 @@ func main() {
 	fmt.Println(sum)
 }
 ```
+
 > 另外 后置语句以及初始化声明都可以省略，但是条件表达式不可省略否则会成为死循环
 
-#### if 
+#### if
+
 ```go
 
 if 初始化声明; 条件表达式 {}
@@ -111,6 +119,7 @@ if 初始化声明; 条件表达式 {} else {}
 ```
 
 #### switch
+
 ```go
 # go 的switch 只会执行第一个选中的case, 之后不会顺序执行， break是隐含的
 switch X {
@@ -119,7 +128,7 @@ switch X {
 	case B:
 	# 语句块
 	default:
-	# 语句块	
+	# 语句块
 	}
 # X 可以省略， 这样就演变成了 if else 控制链
 t := time.Now()
@@ -134,6 +143,7 @@ switch {
 ```
 
 #### defer 延迟执行
+
 > 1.由defer声明的执行语句，会在其父函数return时执行
 > 2.另外被defer声明的执行语句，会依次压栈，满足LIFO 后进先出
 
@@ -150,7 +160,9 @@ func main() {
 # test out
 # counting done 9 8 7 6 5 4 3 2 1 0 
 ```
+
 #### pointers 指针
+
 `var p *int`
 
 ```go
@@ -170,6 +182,7 @@ func main() {
 	fmt.Println(j) // see the new value of j
 }
 ```
+
 > 注意go没有指针算数运算规则
 
 #### struct 结构体
@@ -187,31 +200,39 @@ v.X = 4
 p := &v
 p.X = 1e9
 ```
+
 > 注意到指针变量和结构体变量都能通过"."访问结构体的字段内容，本质是指针是间接寻址，而变量是直接寻址
 
 #### arrays 数组
 
 `var a [10]int`   # var x [size]T
+
 > 由于数组在定义时必须指定size，因此实际使用时切片更多
 
 #### slices 切片
 
->切片是一个动态大小，灵活的数组**视图**，切片本身并不存储数据，底层结构仍然是数组
+> 切片是一个动态大小，灵活的数组**视图**，切片本身并不存储数据，底层结构仍然是数组
+
 ```go
 a[low : high] // 切片是一个左闭右开
 primes := [6]int{2, 3, 5, 7, 11, 13}
 var s []int = primes[1: 4]
 
 ```
+
 #### make  构造函数
-`a := make([]int, 5) // len(a)=5` 
+
+`a := make([]int, 5) // len(a)=5`
 `b := make([]int, 0, 5) // len(b)=0, cap(b)=5`
+
 > 第一个参数为数据类型，第二个为长度，第三个为容量
 
 #### append  插入函数
+
 `func append(s []T, vs ...T) []T // 第一俄国参数为 要插入的切片s, 剩余参数为要插入的值`
 
 #### Range 区间
+
 > 通过range 在切片或者map上生产一个迭代器
 
 ```go
@@ -239,8 +260,8 @@ m[t] = v // 在m中新增一对键值对
 ```
 
 #### function values
-> Functions are values too. They can be passed around just like other values.
 
+> Functions are values too. They can be passed around just like other values.
 
 ```go
 package main
@@ -266,6 +287,7 @@ func main() {
 ```
 
 #### Function closures 函数闭包
+
 > A closure is a function value that references variables from outside its body, the function is "bound" to the variables.
 
 ```go
@@ -292,7 +314,9 @@ func main() {
 }
 
 ```
+
 #### methods 方法
+
 > A method is a function with a special receiver argument
 
 ```go
@@ -301,6 +325,7 @@ func main() {
  }
  # 定义该方法后， 对于数据类型T定义的对象实体，则可以调用该方法, 但注意v.funcName() 在funcName函数内部v是原对象的一个深拷贝，修改操作不会镜像到原对象上
 ```
+
 > 因为go 没有classes 关键字，无法定义类对象, 即 字段+方法的对象
 
 ```go
@@ -308,15 +333,19 @@ func main() {
  # 因此，如果想要对基本数据类型封装方法，可以重新声明一个数据类型
  type MyFloat float64 // MyFloat 和 float64 底层是同一个, 仅仅是数据类型不一样
 ```
+
 > You can only declare a method with a receiver whose type is defined in the same package as the method
 
 #### Pointer receivers 指针接收器
+
 > 对于 func (v T) funcName()无法对原对象进行修改的弊端, 指针接收器则弥补了这一问题
 
 ```go
 # 因为在做拷贝时, 拷贝的是指针的内容，也就是实际对象的存储地址，因此在通过指针访问时，函数内部的修改会镜像到原对象上 == 浅拷贝
 ```
+
 #### interfaces 接口
+
 > An interface type is defined as a set of method signatures
 
 ```go
@@ -324,17 +353,19 @@ func main() {
 var i interface{} //声明了一个空的接口对象
 
 ```
->An empty interface may hold values of any type. Every type implements at least zero methods
 
+> An empty interface may hold values of any type. Every type implements at least zero methods
 
 #### 深拷贝和浅拷贝
+
 > 指针类型的对象在拷贝时，是浅拷贝，因为拷贝的内容是地址
 > 值类型的对象在拷贝时，是深拷贝，因为拷贝的内容是具体的数据结构，具体的数据值
-> 都是拷贝内容，关键的区别在于存储的内容是什么 
-
+> 都是拷贝内容，关键的区别在于存储的内容是什么
 
 #### Type assertions
+
 > 所谓类型断言，指在未声明或者判断的前提下，断定对象的类型
+
 ```go
 var i interface{} = "hello"
 
@@ -345,9 +376,10 @@ f, ok := i.(float64)
 fmt.Println(f, ok)
 ```
 
-
 #### type parameters 类型参数
-`func funcName [T comparable] (s []T, x T) int //  comparable 作为对类型的一个约束,这行代码声明了一个函数，并且只要T数据类型是可比较的类型，就可以作为参数的类型` 
+
+`func funcName [T comparable] (s []T, x T) int //  comparable 作为对类型的一个约束,这行代码声明了一个函数，并且只要T数据类型是可比较的类型，就可以作为参数的类型`
+
 ```go
 
 func Index[T comparable](s []T, x T) int {
@@ -373,12 +405,14 @@ func main() {
 }
 ```
 
->This declaration means that s is a slice of any type T that fulfills the built-in constraint comparable. x is also a value of the same type.
+> This declaration means that s is a slice of any type T that fulfills the built-in constraint comparable. x is also a value of the same type.
 
 #### Generic types 通用类型
+
 > 上述的T数据类型含有comparable约束，如果不想含有任何约束，则是Generic types
-> 
-`[T any] 通用类型  `   
+
+`[T any] 通用类型  `
+
 ```go
 type List[T any] struct {
 	next *List[T]
@@ -388,11 +422,15 @@ type List[T any] struct {
 func main() {
 }
 ```
+
 ---
+
 #### Goroutines 协程
 
 `go f(x, y, z)`
->A goroutine is a lightweight thread managed by the Go runtime.
+
+> A goroutine is a lightweight thread managed by the Go runtime.
+
 ```go
 package main
 
@@ -414,8 +452,11 @@ func main() {
 }
 
 ```
+
 #### channels 通道
->Channels are a typed conduit through which you can send and receive values with the channel operator, <-.
+
+> Channels are a typed conduit through which you can send and receive values with the channel operator, <-.
+
 ```go
 var v T
 ch := make(chan T)
@@ -423,10 +464,11 @@ ch <- v    // Send v to channel ch.
 v := <-ch  // Receive from ch, and
            // assign value to v.
 ```
+
 > 默认情况下（无缓存）, 发送方协程和接收方协程会阻塞，直到另一方准备就绪， 这使得协程可以完成同步(按序执行)而无需额外的锁或者状态变量
 
-
 > 一个通道内有两个等待队列:发送等待队列和接收等待队列，当读操作被阻塞，这个读的 goroutine 就被放入接收等待队列，当写操作触发时，调度器会检查对面的接收等待队列。如果发现队列里有等待者，就直接把写入的数据拷贝给那个等待的 goroutine，然后把对方从等待队列中移出，放入调度器的可运行队列（唤醒它）。整个过程中，这个写的 goroutine 不阻塞，继续执行。
+
 ```go
 func sum(s []int, c chan int) {
 	sum := 0
@@ -447,7 +489,9 @@ func main() {
 	fmt.Println(x, y, x+y)
 }
 ```
+
 #### Buffered Channels
+
 ```go
 # 通过该方式初始化的通道，只有在缓存满的时候，发送协程才会阻塞；缓冲空的时候，接受协程才会被阻塞
 func main() {
@@ -460,9 +504,9 @@ func main() {
 
 ```
 
+#### Select
 
-#### Select 
->A select blocks until one of its cases can run, then it executes that case. It chooses one at random if multiple are ready. 
+> A select blocks until one of its cases can run, then it executes that case. It chooses one at random if multiple are ready.
 > 被select声明的，其包裹的所有case都会被监听， select所在的协程会一直被阻塞，直到有一个case可以执行时
 
 ```go
@@ -492,7 +536,6 @@ func main() {
 	fibonacci(c, quit)
 }
 ```
-
 
 #### sync.Mutex 互斥信号量
 
@@ -537,4 +580,74 @@ func main() {
 	fmt.Println(c.Value("somekey"))
 }
 
+```
+
+---
+
+#### 服务优雅关闭
+
+> 应用场景：当服务端被kill 时 或者异常退出时，可能仍有未完成的请求处理
+>
+> 目的: 为了能尽可能不丢失请求
+
+实现方式: 通过chan通道实现同步，监听kill或者异常退出，正常关闭的信号，收到信号时，设置一定时长的超时等待
+
+```go
+func main() {
+    // ... 初始化 Service、路由等
+
+    server := &http.Server{
+        Addr:    ":8080",
+        Handler: mux,
+    }
+
+    // 启动服务
+    go func() {
+        log.Println("Server starting on :8080")
+        if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+            log.Fatal(err)
+        }
+    }()
+
+    // 监听退出信号
+    quit := make(chan os.Signal, 1)
+    signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+    <-quit
+    log.Println("Shutting down server...")
+
+    // 设置 10 秒的超时，等待未完成的请求处理完
+    ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+    defer cancel()
+    if err := server.Shutdown(ctx); err != nil {
+        log.Fatal("Server forced to shutdown:", err)
+    }
+    log.Println("Server exited gracefully")
+}
+```
+
+> **由于HTTP的listen会使协程阻塞，因此HTTP服务和主服务分属不同的协程，主服务在服务端退出时完成收尾工作**
+
+#### 超时控制
+
+> 应用场景: 当网路阻塞时，对服务端某个接口的请求可能长时间无响应，此时该协程被阻塞且不会主动释放，导致http连接池数量超出，进而阻塞所有的请求，服务端完全瘫痪
+>
+> 目的: 使服务端更健壮
+
+实现方式：对所有的请求附加超时限制，长时间无响应直接终止
+
+```go
+// 数据库查询带超时
+ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+defer cancel()
+rows, err := db.QueryContext(ctx, "SELECT * FROM tasks WHERE status = ?", "pending")
+
+// Redis 操作带超时
+ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+defer cancel()
+cached, err := rdb.Get(ctx, "task:"+taskID).Result()
+
+// Kafka 写入带超时
+ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+defer cancel()
+err := writer.WriteMessages(ctx, msg)
 ```
