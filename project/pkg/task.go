@@ -16,6 +16,7 @@ const (
 type Task struct {
 	ID     string     `json:"id"` // tag标签规范, 在做类型转换时发挥作用
 	Status TaskStatus `json:"status"`
+	Prompt string     `json:"prompt"`
 	Result string     `json:"result,omitempty"`
 }
 

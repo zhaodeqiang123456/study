@@ -4,10 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"log"
+	"simple_service/pkg/llm"
 	"time"
 
 	"github.com/segmentio/kafka-go"
 )
+
+type TaskMessage struct {
+	ID     string `json:"id"`
+	Prompt string `json:"prompt"`
+}
 
 func main() {
 	reader := kafka.NewReader(kafka.ReaderConfig{
@@ -31,19 +37,23 @@ func main() {
 		}
 
 		// 反序列化消息
-		var taskMsg map[string]interface{}
-		if err := json.Unmarshal(msg.Value, &taskMsg); err != nil {
+		var task TaskMessage
+		if err := json.Unmarshal(msg.Value, &task); err != nil {
 			log.Printf("unmarshal error: %v", err)
 			continue
 		}
+		log.Printf("processing task %s, prompt: %s", task.ID, task.Prompt)
 
-		taskID, _ := taskMsg["id"].(string)
-		log.Printf("processing task: %s", taskID)
+		apiKey := ""
+		// 调用 DeepSeek（或你封装好的 llm.CallDeepSeek）
+		reply, err := llm.CallDeepSeekWithSDK(apiKey, task.Prompt)
+		if err != nil {
+			log.Printf("LLM error: %v", err)
+			reply = "AI 服务暂时不可用，请稍后重试"
+		}
 
-		// 模拟处理任务（比如 sleep 2秒）
-		time.Sleep(2 * time.Second)
+		// TODO: 处理完成后更新 MySQL 和 Redis
+		log.Printf("task %s done", reply)
 
-		// TODO: 处理完成后更新 MySQL 和 Redis（你可以在后续加固阶段加入）
-		log.Printf("task %s done", taskID)
 	}
 }

@@ -16,13 +16,6 @@ type DbService struct {
 	db *sql.DB
 }
 
-const (
-	Insert Exec = iota + 1
-	Delete
-	Query
-	Alter
-)
-
 type TaskDetail struct {
 	ID     string   `json:"id"`
 	Status string   `json:"status"`
@@ -50,31 +43,15 @@ func (dbS *DbService) initDB() {
 	fmt.Println("数据库连接成功！")
 }
 
-func (dbS *DbService) sql_exec(exec Exec) func(*Task) {
-	switch exec {
-	case Insert:
-		return func(task *Task) {
-			_, err := dbS.db.Exec("INSERT INTO tasks (id, status, result, created_at) VALUES (?, ?, ?, NOW())", task.ID, task.Status, task.Result)
-			if err != nil {
-				log.Fatal("插入失败:", err)
-			}
-			fmt.Println("任务插入成功！")
-		}
-	// 其他 case 同理
-	default:
-		return nil
-	}
-}
-
 func (dbS *DbService) getTaskDetail(taskID string) (*TaskDetail, error) {
 	var detail TaskDetail
-	err := dbS.db.QueryRow("SELECT id, status FROM tasks WHERE id = ?", taskID).Scan(&detail.ID, &detail.Status)
+	err := dbS.GetdbInstance().QueryRow("SELECT id, status FROM tasks WHERE id = ?", taskID).Scan(&detail.ID, &detail.Status)
 	if err != nil {
 		return nil, err
 	}
 
 	// 2. 查关联日志（利用索引）
-	rows, err := dbS.db.Query("SELECT log_msg FROM task_logs WHERE task_id = ? ORDER BY created_at", taskID)
+	rows, err := dbS.GetdbInstance().Query("SELECT log_msg FROM task_logs WHERE task_id = ? ORDER BY created_at", taskID)
 
 	if err != nil {
 		return nil, err
@@ -93,8 +70,8 @@ func (dbS *DbService) getTaskDetail(taskID string) (*TaskDetail, error) {
 }
 
 // 完成任务并记录日志（事务演示）
-func (dbS *DbService) CompleteTaskWithLog(taskID string) error {
-	tx, err := dbS.db.Begin() // 开启事务
+func (dbS *DbService) CompleteTaskWithLog(task *Task) error {
+	tx, err := dbS.GetdbInstance().Begin() // 开启事务
 	if err != nil {
 		return err
 	}
@@ -107,23 +84,37 @@ func (dbS *DbService) CompleteTaskWithLog(taskID string) error {
 		}
 	}()
 
+	var status string
+	// FOR UPDATE 加排他锁
+	err = tx.QueryRow("SELECT status FROM tasks WHERE id = ? FOR UPDATE", task.ID).Scan(&status)
+	if err != nil {
+		return err
+	}
+	if status == "done" {
+		return nil // 幂等跳过
+	}
 	// 操作1：更新任务状态
-	_, err = tx.Exec("UPDATE tasks SET status = 'done', result = 'success' WHERE id = ?", taskID)
+	_, err = tx.Exec("UPDATE tasks SET status = 'done', result = ? WHERE id = ?", task.Prompt, task.ID)
 	if err != nil {
 		return err
 	}
 
-	// 操作2：插入日志
-	_, err = tx.Exec("INSERT INTO task_logs (task_id, log_msg, created_at) VALUES (?, ?, NOW())", taskID, "任务已自动完成")
-	if err != nil {
-		return err
-	}
+	// // 操作2：插入日志
+	// _, err = tx.Exec("INSERT INTO task_logs (task_id, log_msg, created_at) VALUES (?, ?, NOW())", task.ID, "任务已自动完成")
+	// if err != nil {
+	// 	return err
+	// }
 
 	return nil
 }
 
+func (dbS *DbService) InsertTask(task *Task) error {
+	_, err := dbS.GetdbInstance().Exec("insert into tasks (id, status, result, created_at) values (?, ?, ?, now())", task.ID, task.Status, task.Result)
+	return err
+}
+
 func (dbS *DbService) GetTask(taskID string) (Task, error) {
 	var task Task
-	err := dbS.db.QueryRow("select id, status, result from tasks where id = ?", taskID).Scan(&task.ID, &task.Status, &task.Result)
+	err := dbS.GetdbInstance().QueryRow("select id, status, result from tasks where id = ?", taskID).Scan(&task.ID, &task.Status, &task.Result)
 	return task, err
 }
