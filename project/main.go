@@ -11,12 +11,7 @@ import (
 	"time"
 )
 
-var inst pkg.Instance
-
 func main() {
-
-	inst.InitInstance() //初始化资源
-	defer inst.Detach()
 
 	srv := NewService(pkg.Port) //构建服务
 

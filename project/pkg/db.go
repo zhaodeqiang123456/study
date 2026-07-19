@@ -4,13 +4,15 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"sync"
 
 	_ "github.com/go-sql-driver/mysql" // 记得导入驱动
 )
 
 type Exec int
 
-type dbService struct {
+type DbService struct {
+	mu sync.RWMutex
 	db *sql.DB
 }
 
@@ -27,7 +29,16 @@ type TaskDetail struct {
 	Logs   []string `json:"logs"`
 }
 
-func (dbS *dbService) initDB() {
+func (dbS *DbService) GetdbInstance() *sql.DB {
+	dbS.mu.Lock()
+	defer dbS.mu.Unlock()
+	if dbS.db == nil {
+		dbS.initDB()
+	}
+	return dbS.db
+}
+
+func (dbS *DbService) initDB() {
 	var err error
 	dbS.db, err = sql.Open("mysql", "root:000922@tcp(127.0.0.1:3306)/mysql_learn")
 	if err != nil {
@@ -39,7 +50,7 @@ func (dbS *dbService) initDB() {
 	fmt.Println("数据库连接成功！")
 }
 
-func (dbS *dbService) sql_exec(exec Exec) func(*Task) {
+func (dbS *DbService) sql_exec(exec Exec) func(*Task) {
 	switch exec {
 	case Insert:
 		return func(task *Task) {
@@ -55,7 +66,7 @@ func (dbS *dbService) sql_exec(exec Exec) func(*Task) {
 	}
 }
 
-func (dbS *dbService) getTaskDetail(taskID string) (*TaskDetail, error) {
+func (dbS *DbService) getTaskDetail(taskID string) (*TaskDetail, error) {
 	var detail TaskDetail
 	err := dbS.db.QueryRow("SELECT id, status FROM tasks WHERE id = ?", taskID).Scan(&detail.ID, &detail.Status)
 	if err != nil {
@@ -82,7 +93,7 @@ func (dbS *dbService) getTaskDetail(taskID string) (*TaskDetail, error) {
 }
 
 // 完成任务并记录日志（事务演示）
-func (dbS *dbService) CompleteTaskWithLog(taskID string) error {
+func (dbS *DbService) CompleteTaskWithLog(taskID string) error {
 	tx, err := dbS.db.Begin() // 开启事务
 	if err != nil {
 		return err
@@ -111,7 +122,7 @@ func (dbS *dbService) CompleteTaskWithLog(taskID string) error {
 	return nil
 }
 
-func (dbS *dbService) GetTask(taskID string) (Task, error) {
+func (dbS *DbService) GetTask(taskID string) (Task, error) {
 	var task Task
 	err := dbS.db.QueryRow("select id, status, result from tasks where id = ?", taskID).Scan(&task.ID, &task.Status, &task.Result)
 	return task, err
