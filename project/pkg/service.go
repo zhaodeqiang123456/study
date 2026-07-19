@@ -1,11 +1,10 @@
-package main
+package pkg
 
 import (
 	"context"
 	"encoding/json"
 	"log"
 	"net/http"
-	"simple_service/pkg"
 	"sync"
 	"time"
 
@@ -17,10 +16,11 @@ import (
 type Service struct {
 	mu          sync.RWMutex // 保护所有字段的并发安全
 	webService  *http.Server
-	store       *pkg.TaskStore // 或其他依赖
+	store       *TaskStore // 或其他依赖
 	rdb         *redis.Client
 	kafkaWriter *kafka.Writer
-	dbService   *pkg.DbService
+	kafkaReader *kafka.Reader
+	dbService   *DbService
 }
 
 type TaskRequest struct {
@@ -44,13 +44,25 @@ func NewRedisClient() *redis.Client {
 }
 
 // 初始化 Kafkawriter
-func NewkafkaWriter() *kafka.Writer {
+func NewKafkaWriter() *kafka.Writer {
 	kw := kafka.Writer{
 		Addr:     kafka.TCP("localhost:9092"),
 		Topic:    "task-queue",
 		Balancer: &kafka.LeastBytes{}, // 最简单的分区策略
 	}
 	return &kw
+}
+
+// 初始化 KafkaReader
+func NewKafkaReader() *kafka.Reader {
+	kr := kafka.NewReader(kafka.ReaderConfig{
+		Brokers:  []string{"localhost:9092"},
+		Topic:    "task-queue",
+		GroupID:  "task-consumer-group", // 消费者组，随便取
+		MinBytes: 10e3,
+		MaxBytes: 10e6,
+	})
+	return kr
 }
 
 // 初始化web服务
@@ -74,48 +86,52 @@ func GetInstance[T any](s *Service) *T {
 	var zero T
 	switch any(zero).(type) {
 
-	case *http.Server:
+	case http.Server:
 		if s.webService == nil {
-			s.webService = s.NewWebService(pkg.Port)
+			s.webService = s.NewWebService(Port)
 		}
 		return any(s.webService).(*T)
-	case *pkg.TaskStore:
+	case TaskStore:
 		if s.store == nil {
-			s.store = pkg.NewTaskStore()
+			s.store = NewTaskStore()
 		}
 		return any(s.store).(*T)
 
-	case *redis.Client:
+	case redis.Client:
 		if s.rdb == nil {
 			s.rdb = NewRedisClient()
 		}
 		return any(s.rdb).(*T)
 
-	case *kafka.Writer:
+	case kafka.Writer:
 		if s.kafkaWriter == nil {
-			s.kafkaWriter = NewkafkaWriter()
+			s.kafkaWriter = NewKafkaWriter()
 		}
 		return any(s.kafkaWriter).(*T)
-	case *pkg.DbService:
+	case DbService:
 		if s.dbService == nil {
-			s.dbService = &pkg.DbService{}
+			s.dbService = &DbService{}
 		}
 		return any(s.dbService).(*T)
-
+	case kafka.Reader:
+		if s.kafkaReader == nil {
+			s.kafkaReader = NewKafkaReader()
+		}
+		return any(s.kafkaReader).(*T)
 	default:
 		return nil
 
 	}
 }
 
-func NewService(addr string) *Service {
+func NewService() *Service {
 	// 创建服务
 	svc := &Service{}
 	return svc
 }
 
 func (s *Service) Start() error {
-	log.Println("webService starting on", s.webService.Addr)
+	log.Println("webService starting on")
 	var webServer *http.Server = GetInstance[http.Server](s)
 	return webServer.ListenAndServe()
 }
@@ -142,13 +158,13 @@ func (s *Service) handlePostTask(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "prompt is required", http.StatusBadRequest)
 		return
 	}
-	var store *pkg.TaskStore = GetInstance[pkg.TaskStore](s)
+	var store *TaskStore = GetInstance[TaskStore](s)
 	taskID := store.Create()
 	task, _ := store.Get(taskID)
 
 	go func() {
 		// 将task插入数据库
-		var dbService *pkg.DbService = GetInstance[pkg.DbService](s)
+		var dbService *DbService = GetInstance[DbService](s)
 		err := dbService.InsertTask(task)
 		if err != nil {
 			log.Printf("insert task error: %v", err)
@@ -203,14 +219,14 @@ func (s *Service) handleGetResult(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(task)
 }
 
-func (s *Service) getTaskWithCache(taskID string) (*pkg.Task, error) {
+func (s *Service) getTaskWithCache(taskID string) (*Task, error) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	// 1. 尝试从 Redis 读取
 	var rdb *redis.Client = GetInstance[redis.Client](s)
 	cached, err := rdb.Get(ctx, "task:"+taskID).Result()
-	var task pkg.Task
+	var task Task
 	if err == nil {
 		log.Println("get cache successfully")
 		// 缓存命中，直接反序列化返回
@@ -219,7 +235,7 @@ func (s *Service) getTaskWithCache(taskID string) (*pkg.Task, error) {
 	}
 	log.Println("get cache fail, try to get task from sql")
 	// 2. 缓存未命中，查 MySQL
-	var dbService *pkg.DbService = GetInstance[pkg.DbService](s)
+	var dbService *DbService = GetInstance[DbService](s)
 	task, err = dbService.GetTask(taskID)
 	if err != nil {
 		return nil, err

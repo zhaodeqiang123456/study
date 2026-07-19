@@ -22,7 +22,7 @@ type TaskDetail struct {
 	Logs   []string `json:"logs"`
 }
 
-func (dbS *DbService) GetdbInstance() *sql.DB {
+func (dbS *DbService) getdbInstance() *sql.DB {
 	dbS.mu.Lock()
 	defer dbS.mu.Unlock()
 	if dbS.db == nil {
@@ -45,13 +45,13 @@ func (dbS *DbService) initDB() {
 
 func (dbS *DbService) getTaskDetail(taskID string) (*TaskDetail, error) {
 	var detail TaskDetail
-	err := dbS.GetdbInstance().QueryRow("SELECT id, status FROM tasks WHERE id = ?", taskID).Scan(&detail.ID, &detail.Status)
+	err := dbS.getdbInstance().QueryRow("SELECT id, status FROM tasks WHERE id = ?", taskID).Scan(&detail.ID, &detail.Status)
 	if err != nil {
 		return nil, err
 	}
 
 	// 2. 查关联日志（利用索引）
-	rows, err := dbS.GetdbInstance().Query("SELECT log_msg FROM task_logs WHERE task_id = ? ORDER BY created_at", taskID)
+	rows, err := dbS.getdbInstance().Query("SELECT log_msg FROM task_logs WHERE task_id = ? ORDER BY created_at", taskID)
 
 	if err != nil {
 		return nil, err
@@ -71,7 +71,7 @@ func (dbS *DbService) getTaskDetail(taskID string) (*TaskDetail, error) {
 
 // 完成任务并记录日志（事务演示）
 func (dbS *DbService) CompleteTaskWithLog(task *Task) error {
-	tx, err := dbS.GetdbInstance().Begin() // 开启事务
+	tx, err := dbS.getdbInstance().Begin() // 开启事务
 	if err != nil {
 		return err
 	}
@@ -94,7 +94,7 @@ func (dbS *DbService) CompleteTaskWithLog(task *Task) error {
 		return nil // 幂等跳过
 	}
 	// 操作1：更新任务状态
-	_, err = tx.Exec("UPDATE tasks SET status = 'done', result = ? WHERE id = ?", task.Prompt, task.ID)
+	_, err = tx.Exec("UPDATE tasks SET status = 'done', result = ? WHERE id = ?", task.Result, task.ID)
 	if err != nil {
 		return err
 	}
@@ -109,12 +109,12 @@ func (dbS *DbService) CompleteTaskWithLog(task *Task) error {
 }
 
 func (dbS *DbService) InsertTask(task *Task) error {
-	_, err := dbS.GetdbInstance().Exec("insert into tasks (id, status, result, created_at) values (?, ?, ?, now())", task.ID, task.Status, task.Result)
+	_, err := dbS.getdbInstance().Exec("insert into tasks (id, status, result, created_at) values (?, ?, ?, now())", task.ID, task.Status, task.Result)
 	return err
 }
 
 func (dbS *DbService) GetTask(taskID string) (Task, error) {
 	var task Task
-	err := dbS.GetdbInstance().QueryRow("select id, status, result from tasks where id = ?", taskID).Scan(&task.ID, &task.Status, &task.Result)
+	err := dbS.getdbInstance().QueryRow("select id, status, result from tasks where id = ?", taskID).Scan(&task.ID, &task.Status, &task.Result)
 	return task, err
 }

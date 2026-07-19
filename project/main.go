@@ -13,7 +13,7 @@ import (
 
 func main() {
 
-	srv := NewService(pkg.Port) //构建服务
+	srv := pkg.NewService() //构建服务
 
 	go func() {
 		if err := srv.Start(); err != nil && err != http.ErrServerClosed {
