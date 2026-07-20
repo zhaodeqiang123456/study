@@ -39,7 +39,7 @@ func CallDeepSeekWithSDK(apiKey, userPrompt string) (string, error) {
 }
 
 // 流式处理，每收到一个 chunk 就 RPUSH 到 Redis
-func ProcessTaskStreamly(apiKey, taskID, prompt string, srv *pkg.Service) (fullResponse string, err error) {
+func ProcessTaskStreamly(apiKey, taskID string, history []openai.ChatCompletionMessageParamUnion, srv *pkg.Service) (fullResponse string, err error) {
 	// ... 幂等性检查、事务等
 
 	streamKey := "stream:" + taskID
@@ -55,10 +55,8 @@ func ProcessTaskStreamly(apiKey, taskID, prompt string, srv *pkg.Service) (fullR
 	)
 	// 构造流式请求
 	stream := client.Chat.Completions.NewStreaming(context.Background(), openai.ChatCompletionNewParams{
-		Model: openai.ChatModel("deepseek-chat"),
-		Messages: []openai.ChatCompletionMessageParamUnion{
-			openai.UserMessage(prompt),
-		},
+		Model:    openai.ChatModel("deepseek-chat"),
+		Messages: history,
 	})
 	defer stream.Close()
 

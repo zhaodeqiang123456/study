@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI 推理网关 · 对话测试</title>
+    <title>AI 推理网关 · 多轮对话</title>
     <style>
         :root {
             --bg: #f9fafb;
@@ -13,6 +13,7 @@
             --text-secondary: #6b7280;
             --border: #e5e7eb;
             --radius: 12px;
+            --sidebar-width: 260px;
         }
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -20,27 +21,62 @@
             background: var(--bg);
             height: 100vh;
             display: flex;
-            justify-content: center;
-            align-items: center;
         }
-        .chat-container {
-            width: 100%;
-            max-width: 800px;
-            height: 90vh;
+        /* 侧边栏 */
+        .sidebar {
+            width: var(--sidebar-width);
             background: var(--surface);
-            border-radius: var(--radius);
-            box-shadow: 0 4px 24px rgba(0,0,0,0.06);
+            border-right: 1px solid var(--border);
             display: flex;
             flex-direction: column;
-            overflow: hidden;
+            height: 100vh;
         }
-        .header {
-            padding: 16px 24px;
+        .sidebar-header {
+            padding: 16px;
             border-bottom: 1px solid var(--border);
             font-weight: 600;
-            font-size: 18px;
+            font-size: 16px;
             color: var(--primary);
-            background: #fafafa;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .btn-new {
+            background: var(--primary);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            padding: 6px 12px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        .btn-new:hover { opacity: 0.9; }
+        .conversation-list {
+            flex: 1;
+            overflow-y: auto;
+            padding: 8px;
+        }
+        .conv-item {
+            padding: 12px;
+            border-radius: 8px;
+            cursor: pointer;
+            margin-bottom: 4px;
+            transition: background 0.1s;
+            font-size: 14px;
+            color: var(--text);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .conv-item:hover { background: #f3f4f6; }
+        .conv-item.active { background: #e0e7ff; color: var(--primary); font-weight: 500; }
+        /* 主聊天区 */
+        .chat-container {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            overflow: hidden;
         }
         .messages {
             flex: 1;
@@ -130,7 +166,7 @@
             border-color: var(--primary);
             box-shadow: 0 0 0 3px rgba(79,70,229,0.1);
         }
-        button {
+        button.send {
             width: 44px;
             height: 44px;
             border-radius: 50%;
@@ -145,47 +181,112 @@
             transition: background 0.2s, transform 0.1s;
             flex-shrink: 0;
         }
-        button:active { transform: scale(0.95); }
-        button:disabled { background: #9ca3af; cursor: not-allowed; }
-        .status {
-            font-size: 12px;
+        button.send:active { transform: scale(0.95); }
+        button.send:disabled { background: #9ca3af; cursor: not-allowed; }
+        .empty-chat {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
             color: var(--text-secondary);
-            margin: 4px 0 0 8px;
+            font-size: 18px;
         }
     </style>
 </head>
 <body>
-<div class="chat-container">
-    <div class="header">✨ AI 推理网关 · 异步任务测试</div>
-    <div class="messages" id="messages"></div>
-    <div class="input-area">
+<div class="sidebar">
+    <div class="sidebar-header">
+        <span>✨ 会话列表</span>
+        <button class="btn-new" onclick="newConversation()">+ 新对话</button>
+    </div>
+    <div class="conversation-list" id="convList"></div>
+</div>
+<div class="chat-container" id="chatContainer">
+    <div class="empty-chat" id="emptyHint">选择或创建一个会话开始聊天</div>
+    <div class="messages" id="messages" style="display: none;"></div>
+    <div class="input-area" style="display: none;" id="inputArea">
         <textarea id="promptInput" rows="1" placeholder="输入你的问题，回车发送..." onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendMessage()}"></textarea>
-        <button id="sendBtn" onclick="sendMessage()">➤</button>
+        <button class="send" id="sendBtn" onclick="sendMessage()">➤</button>
     </div>
 </div>
 
 <script>
-    // ========== 配置 ==========
-    // 如果通过后端服务访问（推荐），不用改；如果是本地双击打开，请改成完整URL
-    const API_BASE = ''; // e.g., 'http://localhost:8080'
+    const API_BASE = '';  // 如果通过后端提供服务，不用改
 
-    // 状态
+    // 全局状态
+    let currentConversationId = null;
     let isWaiting = false;
 
-    // ========== 工具函数 ==========
-    function $(id) { return document.getElementById(id); }
-    const messagesDiv = $('messages');
-    const promptInput = $('promptInput');
-    const sendBtn = $('sendBtn');
+    // DOM元素
+    const convListEl = document.getElementById('convList');
+    const messagesEl = document.getElementById('messages');
+    const emptyHint = document.getElementById('emptyHint');
+    const inputArea = document.getElementById('inputArea');
+    const promptInput = document.getElementById('promptInput');
+    const sendBtn = document.getElementById('sendBtn');
 
-    function scrollToBottom() {
-        messagesDiv.scrollTop = messagesDiv.scrollHeight;
+    // ========== 初始化 ==========
+    async function loadConversations() {
+        try {
+            const resp = await fetch(API_BASE + '/conversations');
+            const convs = await resp.json();
+            renderConversationList(convs);
+        } catch (err) {
+            console.error('加载会话列表失败:', err);
+        }
     }
 
-    // 添加消息
-    function addMessage(role, content) {
+    function renderConversationList(convs) {
+        convListEl.innerHTML = '';
+        convs.forEach(conv => {
+            const div = document.createElement('div');
+            div.className = 'conv-item' + (conv.id === currentConversationId ? ' active' : '');
+            div.textContent = conv.title || '新对话';
+            div.onclick = () => switchConversation(conv.id);
+            convListEl.appendChild(div);
+        });
+    }
+
+    async function newConversation() {
+        try {
+            const resp = await fetch(API_BASE + '/conversations', { method: 'POST' });
+            const data = await resp.json();
+            await loadConversations();
+            switchConversation(data.id);
+        } catch (err) {
+            console.error('创建会话失败:', err);
+        }
+    }
+
+    async function switchConversation(convId) {
+        currentConversationId = convId;
+        // 高亮当前会话
+        document.querySelectorAll('.conv-item').forEach(el => {
+            el.classList.toggle('active', el.textContent === convId || el.textContent === '新对话'); // 简单处理
+        });
+        // 显示聊天区，隐藏空状态
+        emptyHint.style.display = 'none';
+        messagesEl.style.display = 'flex';
+        inputArea.style.display = 'flex';
+        messagesEl.innerHTML = '<div class="message assistant">正在加载历史消息...</div>';
+
+        // 加载历史消息
+        try {
+            const resp = await fetch(API_BASE + '/conversations/messages?id=' + convId);
+            const msgs = await resp.json();
+            messagesEl.innerHTML = '';
+            msgs.forEach(msg => addMessage(msg.role, msg.content, false));
+        } catch (err) {
+            messagesEl.innerHTML = '<div class="message assistant">加载历史消息失败</div>';
+        }
+        promptInput.focus();
+    }
+
+    // ========== 消息渲染 ==========
+    function addMessage(role, content, shouldAnimate = true) {
         const div = document.createElement('div');
         div.className = `message ${role}`;
+        if (!shouldAnimate) div.style.animation = 'none';
         const avatar = document.createElement('div');
         avatar.className = 'avatar';
         avatar.textContent = role === 'user' ? '👤' : '🤖';
@@ -194,12 +295,11 @@
         bubble.textContent = content;
         div.appendChild(avatar);
         div.appendChild(bubble);
-        messagesDiv.appendChild(div);
+        messagesEl.appendChild(div);
         scrollToBottom();
         return bubble;
     }
 
-    // 添加加载动画
     function addLoadingIndicator() {
         const div = document.createElement('div');
         div.className = 'message assistant loading';
@@ -212,31 +312,29 @@
         bubble.innerHTML = '<span class="loading-dot"></span><span class="loading-dot"></span><span class="loading-dot"></span>';
         div.appendChild(avatar);
         div.appendChild(bubble);
-        messagesDiv.appendChild(div);
+        messagesEl.appendChild(div);
         scrollToBottom();
         return div;
     }
 
     function removeLoadingIndicator() {
-        const el = $('loadingMsg');
+        const el = document.getElementById('loadingMsg');
         if (el) el.remove();
     }
 
-    // 设置UI状态
-    function setInputEnabled(enabled) {
-        promptInput.disabled = !enabled;
-        sendBtn.disabled = !enabled;
-        if (enabled) promptInput.focus();
+    function scrollToBottom() {
+        messagesEl.scrollTop = messagesEl.scrollHeight;
     }
 
     // ========== 发送消息 ==========
     async function sendMessage() {
-        if (isWaiting) return;
+        if (isWaiting || !currentConversationId) return;
         const prompt = promptInput.value.trim();
         if (!prompt) return;
 
         isWaiting = true;
-        setInputEnabled(false);
+        sendBtn.disabled = true;
+        promptInput.disabled = true;
         addMessage('user', prompt);
         promptInput.value = '';
         promptInput.style.height = 'auto';
@@ -244,21 +342,20 @@
         const loadingEl = addLoadingIndicator();
 
         try {
-            // 1. 创建任务
+            // 1. 创建任务（异步）
             const createResp = await fetch(API_BASE + '/task', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ prompt: prompt })
+                body: JSON.stringify({ prompt: prompt, conversation_id: currentConversationId })
             });
             if (!createResp.ok) throw new Error('创建任务失败: ' + await createResp.text());
             const { id: taskId } = await createResp.json();
             console.log('任务ID:', taskId);
 
-            // 2. 尝试流式获取结果，失败则回退到轮询
-            const streamSupported = await tryStreamResult(taskId);
-            if (!streamSupported) {
-                // 流式不可用，改用轮询
-                console.log('流式端点不可用，切换到轮询模式');
+            // 2. 流式获取结果
+            const streamSuccess = await tryStreamResult(taskId);
+            if (!streamSuccess) {
+                // 回退到轮询
                 await pollUntilDone(taskId);
             }
         } catch (err) {
@@ -267,20 +364,19 @@
             addMessage('assistant', '❌ 请求失败: ' + err.message);
         } finally {
             removeLoadingIndicator();
-            setInputEnabled(true);
             isWaiting = false;
-            scrollToBottom();
+            sendBtn.disabled = false;
+            promptInput.disabled = false;
+            promptInput.focus();
         }
     }
 
-    // ========== 流式处理（SSE） ==========
     async function tryStreamResult(taskId) {
         try {
             const response = await fetch(API_BASE + `/result/stream?id=${taskId}`);
-            if (!response.ok) return false; // 可能路由未实现
-
+            if (!response.ok) return false;
             removeLoadingIndicator();
-            const bubble = addMessage('assistant', ''); // 空内容，准备逐字填充
+            const bubble = addMessage('assistant', '', false); // 空内容，准备逐字填充
             const reader = response.body.getReader();
             const decoder = new TextDecoder();
             let buffer = '';
@@ -311,9 +407,8 @@
         }
     }
 
-    // ========== 轮询降级 ==========
     async function pollUntilDone(taskId) {
-        const maxAttempts = 60; // 最多等 60 秒
+        const maxAttempts = 60;
         for (let i = 0; i < maxAttempts; i++) {
             await new Promise(resolve => setTimeout(resolve, 1000));
             try {
@@ -325,8 +420,6 @@
                     addMessage('assistant', task.result || '(空回复)');
                     return;
                 }
-                // 如果状态是 pending，继续等待
-                console.log('任务状态:', task.status);
             } catch (e) {
                 console.error('轮询出错:', e);
             }
@@ -341,8 +434,8 @@
         this.style.height = Math.min(this.scrollHeight, 120) + 'px';
     });
 
-    // 初始化
-    promptInput.focus();
+    // 启动
+    loadConversations();
 </script>
 </body>
 </html>

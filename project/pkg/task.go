@@ -14,10 +14,11 @@ const (
 )
 
 type Task struct {
-	ID     string     `json:"id"` // tag标签规范, 在做类型转换时发挥作用
-	Status TaskStatus `json:"status"`
-	Prompt string     `json:"prompt"`
-	Result string     `json:"result,omitempty"`
+	ID             string     `json:"id"` // tag标签规范, 在做类型转换时发挥作用
+	Status         TaskStatus `json:"status"`
+	Prompt         string     `json:"prompt"`
+	Result         string     `json:"result,omitempty"`
+	ConversationID string     `json:"conversation_id"`
 }
 
 type TaskStore struct { // 一个任务仓库, 存储了所有任务的向量（任务的存储实际地址）

@@ -25,7 +25,8 @@ type Service struct {
 }
 
 type TaskRequest struct {
-	Prompt string `json:"prompt"`
+	Prompt         string `json:"prompt"`
+	ConversationID string `json:"conversation_id"`
 }
 
 // 初始化 Redis 客户端
@@ -75,6 +76,9 @@ func (svc *Service) NewWebService(addr string) *http.Server {
 		http.ServeFile(w, r, "static/index.html")
 	})
 	mux.HandleFunc("/result/stream", svc.handleStreamResult)
+	mux.HandleFunc("POST /conversations", svc.handleCreateConversation)
+	mux.HandleFunc("GET /conversations", svc.handleListConversations)
+	mux.HandleFunc("GET /conversations/messages", svc.handleGetMessages)
 	// mux.HandleFunc("/sqlTask", svc.handleSqlTask)
 	webServer := http.Server{
 		Addr:    addr,
@@ -166,7 +170,7 @@ func (s *Service) handlePostTask(w http.ResponseWriter, r *http.Request) {
 	var store *TaskStore = GetInstance[TaskStore](s)
 	taskID := store.Create()
 	task, _ := store.Get(taskID)
-
+	task.ConversationID = req.ConversationID
 	go func() {
 		// 将task插入数据库
 		var dbService *DbService = GetInstance[DbService](s)
@@ -185,8 +189,9 @@ func (s *Service) handlePostTask(w http.ResponseWriter, r *http.Request) {
 
 	// 构造 Kafka 消息
 	taskMsg := map[string]any{
-		"id":     taskID,
-		"prompt": req.Prompt,
+		"id":              taskID,
+		"prompt":          req.Prompt,
+		"conversation_id": req.ConversationID,
 	}
 
 	msgBytes, _ := json.Marshal(taskMsg)
@@ -295,4 +300,52 @@ func (s *Service) handleStreamResult(w http.ResponseWriter, r *http.Request) {
 		// 没有新数据时等 100ms 再查
 		time.Sleep(100 * time.Millisecond)
 	}
+}
+
+// POST /conversations
+func (s *Service) handleCreateConversation(w http.ResponseWriter, r *http.Request) {
+
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var db *DbService = GetInstance[DbService](s)
+	id, err := db.InsertConversation()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	json.NewEncoder(w).Encode(map[string]string{"id": id})
+}
+
+// GET /conversations
+func (s *Service) handleListConversations(w http.ResponseWriter, r *http.Request) {
+
+	var db *DbService = GetInstance[DbService](s)
+	convs, err := db.QueryConversation()
+	if err != nil { /* 错误处理 */
+	}
+	json.NewEncoder(w).Encode(convs)
+}
+
+// GET /conversations/messages?id=xxx
+func (s *Service) handleGetMessages(w http.ResponseWriter, r *http.Request) {
+	convID := r.URL.Query().Get("id")
+	var db *DbService = GetInstance[DbService](s)
+	rows, err := db.GetdbInstance().Query("SELECT role, content FROM messages WHERE conversation_id = ? ORDER BY created_at ASC", convID)
+	if err != nil { /* 错误处理 */
+	}
+	defer rows.Close()
+	var msgs []map[string]string
+	for rows.Next() {
+		var role, content string
+		rows.Scan(&role, &content)
+		msgs = append(msgs, map[string]string{"role": role, "content": content})
+	}
+	if err := rows.Err(); err != nil {
+		log.Printf("handleGetMessages遍历出错: %v", err)
+		return // 或其他错误处理
+	}
+	json.NewEncoder(w).Encode(msgs)
 }
