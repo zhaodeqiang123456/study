@@ -3,6 +3,7 @@ package pkg
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"sync"
@@ -70,6 +71,10 @@ func (svc *Service) NewWebService(addr string) *http.Server {
 	mux := http.NewServeMux() // 不要用全局默认的 http.HandleFunc
 	mux.HandleFunc("/task", svc.handlePostTask)
 	mux.HandleFunc("/result", svc.handleGetResult)
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFile(w, r, "static/index.html")
+	})
+	mux.HandleFunc("/result/stream", svc.handleStreamResult)
 	// mux.HandleFunc("/sqlTask", svc.handleSqlTask)
 	webServer := http.Server{
 		Addr:    addr,
@@ -246,4 +251,48 @@ func (s *Service) getTaskWithCache(taskID string) (*Task, error) {
 	rdb.Set(ctx, "task:"+taskID, taskJSON, 30*time.Second)
 
 	return &task, nil
+}
+
+func (s *Service) handleStreamResult(w http.ResponseWriter, r *http.Request) {
+	taskID := r.URL.Query().Get("id")
+	if taskID == "" {
+		http.Error(w, "missing id", http.StatusBadRequest)
+		return
+	}
+
+	// 设置 SSE 头
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+
+	streamKey := "stream:" + taskID
+	lastIndex := 0
+	var rdb *redis.Client = GetInstance[redis.Client](s)
+	for {
+
+		// 从 Redis 列表中获取新数据（从上次索引后开始）
+		chunks, err := rdb.LRange(context.Background(), streamKey, int64(lastIndex), -1).Result()
+		if err != nil {
+			log.Println(err.Error())
+			break
+		}
+		for _, chunk := range chunks {
+			if chunk == "[DONE]" {
+				fmt.Fprintf(w, "data: [DONE]\n\n")
+				flusher.Flush()
+				return
+			}
+			// 发送数据块，SSE 格式：data: xxx\n\n
+			fmt.Fprintf(w, "data: %s\n\n", chunk)
+			flusher.Flush()
+			lastIndex++
+		}
+		// 没有新数据时等 100ms 再查
+		time.Sleep(100 * time.Millisecond)
+	}
 }
