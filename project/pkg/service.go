@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/qdrant/go-client/qdrant"
 	"github.com/redis/go-redis/v9"
 	"github.com/segmentio/kafka-go"
 )
@@ -22,11 +23,19 @@ type Service struct {
 	kafkaWriter *kafka.Writer
 	kafkaReader *kafka.Reader
 	dbService   *DbService
+	qClient     *qdrant.Client
 }
 
 type TaskRequest struct {
 	Prompt         string `json:"prompt"`
 	ConversationID string `json:"conversation_id"`
+}
+
+type DocumentPoint struct {
+	ID     string
+	Vector []float32
+	Text   string
+	Source string
 }
 
 // 初始化 Redis 客户端
@@ -65,6 +74,20 @@ func NewKafkaReader() *kafka.Reader {
 		MaxBytes: 10e6,
 	})
 	return kr
+}
+
+// 初始化向量数据库Qdrant
+func NewQdrant() *qdrant.Client {
+
+	client, err := qdrant.NewClient(&qdrant.Config{
+		Host:   "localhost",
+		Port:   6334,  // gRPC 端口
+		UseTLS: false, // 本地测试不用 TLS
+	})
+	if err != nil {
+		log.Fatal("无法连接 Qdrant: ", err)
+	}
+	return client
 }
 
 // 初始化web服务
@@ -127,6 +150,11 @@ func GetInstance[T any](s *Service) *T {
 			s.kafkaReader = NewKafkaReader()
 		}
 		return any(s.kafkaReader).(*T)
+	case qdrant.Client:
+		if s.qClient == nil {
+			s.qClient = NewQdrant()
+		}
+		return any(s.qClient).(*T)
 	default:
 		return nil
 
@@ -348,4 +376,17 @@ func (s *Service) handleGetMessages(w http.ResponseWriter, r *http.Request) {
 		return // 或其他错误处理
 	}
 	json.NewEncoder(w).Encode(msgs)
+}
+
+func (s *Service) CreateCollection() error {
+	ctx := context.Background()
+	var client *qdrant.Client = GetInstance[qdrant.Client](s)
+	err := client.CreateCollection(ctx, &qdrant.CreateCollection{
+		CollectionName: "knowledge_base",
+		VectorsConfig: qdrant.NewVectorsConfig(&qdrant.VectorParams{
+			Size:     1536,
+			Distance: qdrant.Distance_Cosine,
+		}),
+	})
+	return err
 }

@@ -3,11 +3,13 @@ package llm
 import (
 	"context"
 	"fmt"
+	"os"
 	"simple_service/pkg"
 	"time"
 
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
+	"github.com/openai/openai-go/packages/param"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -80,4 +82,33 @@ func ProcessTaskStreamly(apiKey, taskID string, history []openai.ChatCompletionM
 	rdb.RPush(context.Background(), streamKey, "[DONE]")
 
 	return fullResponse, err
+}
+
+func GetEmbedding(text string) ([]float32, error) {
+	client := openai.NewClient(
+		option.WithAPIKey(os.Getenv("DEEPSEEK_API_KEY")),
+		option.WithBaseURL("https://api.deepseek.com/v1"),
+	)
+
+	// Model 字段直接使用字符串常量
+	// Input 字段使用 SDK 提供的构造函数 EmbeddingNewParamsInputArrayOfStrings
+	resp, err := client.Embeddings.New(context.Background(), openai.EmbeddingNewParams{
+		Model: openai.EmbeddingModelTextEmbedding3Small,
+		Input: openai.EmbeddingNewParamsInputUnion{
+			OfString: param.NewOpt(text), // 将 string 包装为 param.Opt
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("embedding failed: %w", err)
+	}
+	if len(resp.Data) == 0 {
+		return nil, fmt.Errorf("no embedding returned")
+	}
+	embedding64 := resp.Data[0].Embedding
+	// 转换为 []float32
+	embedding32 := make([]float32, len(embedding64))
+	for i, v := range embedding64 {
+		embedding32[i] = float32(v)
+	}
+	return embedding32, nil
 }

@@ -3,10 +3,13 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"os"
 	"simple_service/pkg"
 	"simple_service/pkg/llm"
+	"simple_service/pkg/rag"
+	"strings"
 	"time"
 
 	"github.com/joho/godotenv"
@@ -21,6 +24,8 @@ type TaskMessage struct {
 	ConversationID string `json:"conversation_id"`
 }
 
+var documentChunks []string
+
 func main() {
 
 	srv := pkg.NewService() //构建服务
@@ -29,7 +34,7 @@ func main() {
 	if err := godotenv.Load(); err != nil {
 		log.Println("No .env file found, using system env")
 	}
-
+	// 获取大语言模型的apikey
 	apiKey := os.Getenv("DEEPSEEK_API_KEY")
 	if apiKey == "" {
 		log.Fatal("DEEPSEEK_API_KEY not set")
@@ -37,6 +42,14 @@ func main() {
 	var reader *kafka.Reader = pkg.GetInstance[kafka.Reader](srv)
 	var dbService *pkg.DbService = pkg.GetInstance[pkg.DbService](srv)
 	var rdb *redis.Client = pkg.GetInstance[redis.Client](srv)
+	// 建立qrant向量数据库连接
+	srv.CreateCollection()
+	// 预加载文本数据，插入向量数据库
+	documentChunksTemp, err := rag.LoadKnowledgeBase()
+	documentChunks = documentChunksTemp
+	if err != nil {
+		log.Print(err.Error())
+	}
 	for {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		msg, err := reader.ReadMessage(ctx)
@@ -61,9 +74,35 @@ func main() {
 		// 	reply = "AI 服务暂时不可用，请稍后重试"
 		// }
 
+		// ==================== 向量检索 ====================
+		// queryVector, _ := llm.GetEmbedding(task.Prompt)
+		// // 检索相关文档
+		// var docs []string
+		// if queryVector != nil {
+		// 	docs, err = rag.SearchByVector(queryVector, 3)
+		// 	if err != nil {
+		// 		log.Printf("search error: %v", err)
+		// 		docs = nil
+		// 	}
+		// }
+
+		// ========================= 关键词搜索 =============
+		docs := searchByKeyword(task.Prompt)
+		// 构建增强 prompt
+		augmentedPrompt := task.Prompt
+		if len(docs) > 0 {
+			augmentedPrompt = fmt.Sprintf(
+				"你是一个专业的AI助手。以下是可能相关的参考资料：\n\n%s\n\n"+
+					"用户问题：%s\n\n"+
+					"请根据参考资料提供准确答案，并在此基础上适当补充背景知识、实际案例或相关技术细节，使回答更加丰富和有用。",
+				strings.Join(docs, "\n\n"),
+				task.Prompt,
+			)
+		}
+		// ==================== 流式调用 ====================
 		history := dbService.QueryHistory(task.ConversationID)
-		// 把当前用户提示追加到最后
-		history = append(history, openai.UserMessage(task.Prompt))
+		// 把增强的prompt追加到最后
+		history = append(history, openai.UserMessage(augmentedPrompt))
 		// SSE 流式调用
 		reply, err := llm.ProcessTaskStreamly(apiKey, task.ID, history, srv)
 
@@ -102,4 +141,19 @@ func truncateText(s string, maxLen int) string {
 		return s
 	}
 	return string(runes[:maxLen]) + "..."
+}
+
+func searchByKeyword(query string) []string {
+	keywords := strings.Fields(query)
+	var results []string
+	for _, chunk := range documentChunks {
+		for _, kw := range keywords {
+			if strings.Contains(chunk, kw) {
+				results = append(results, chunk)
+				break
+			}
+		}
+	}
+	log.Printf("[RAG] 文件已成功匹配 (%d 个片段), 原文件含有 %d 个片段", len(results), len(documentChunks))
+	return results
 }
