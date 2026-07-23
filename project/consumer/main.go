@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log"
 	"os"
 	"simple_service/pkg"
@@ -13,7 +12,6 @@ import (
 	"time"
 
 	"github.com/joho/godotenv"
-	"github.com/openai/openai-go"
 	"github.com/redis/go-redis/v9"
 	"github.com/segmentio/kafka-go"
 )
@@ -67,12 +65,12 @@ func main() {
 		}
 		log.Printf("processing task %s, prompt: %s", task.ID, task.Prompt)
 
-		// // 调用 DeepSeek
-		// reply, err := llm.CallDeepSeekWithSDK(apiKey, task.Prompt)
-		// if err != nil {
-		// 	log.Printf("LLM error: %v", err)
-		// 	reply = "AI 服务暂时不可用，请稍后重试"
-		// }
+		// 调用 DeepSeek
+		reply, err := llm.CallDeepSeekWithTools(apiKey, task.Prompt)
+		if err != nil {
+			log.Printf("LLM error: %v", err)
+			reply = "AI 服务暂时不可用，请稍后重试"
+		}
 
 		// ==================== 向量检索 ====================
 		// queryVector, _ := llm.GetEmbedding(task.Prompt)
@@ -87,29 +85,29 @@ func main() {
 		// }
 
 		// ========================= 关键词搜索 =============
-		docs := searchByKeyword(task.Prompt)
-		// 构建增强 prompt
-		augmentedPrompt := task.Prompt
-		if len(docs) > 0 {
-			augmentedPrompt = fmt.Sprintf(
-				"你是一个专业的AI助手。以下是可能相关的参考资料：\n\n%s\n\n"+
-					"用户问题：%s\n\n"+
-					"请根据参考资料提供准确答案，并在此基础上适当补充背景知识、实际案例或相关技术细节，使回答更加丰富和有用。",
-				strings.Join(docs, "\n\n"),
-				task.Prompt,
-			)
-		}
-		// ==================== 流式调用 ====================
-		history := dbService.QueryHistory(task.ConversationID)
-		// 把增强的prompt追加到最后
-		history = append(history, openai.UserMessage(augmentedPrompt))
-		// SSE 流式调用
-		reply, err := llm.ProcessTaskStreamly(apiKey, task.ID, history, srv)
+		// docs := searchByKeyword(task.Prompt)
+		// // 构建增强 prompt
+		// augmentedPrompt := task.Prompt
+		// if len(docs) > 0 {
+		// 	augmentedPrompt = fmt.Sprintf(
+		// 		"你是一个专业的AI助手。以下是可能相关的参考资料：\n\n%s\n\n"+
+		// 			"用户问题：%s\n\n"+
+		// 			"请根据参考资料提供准确答案，并在此基础上适当补充背景知识、实际案例或相关技术细节，使回答更加丰富和有用。",
+		// 		strings.Join(docs, "\n\n"),
+		// 		task.Prompt,
+		// 	)
+		// }
+		// // ==================== 流式调用 ====================
+		// history := dbService.QueryHistory(task.ConversationID)
+		// // 把增强的prompt追加到最后
+		// history = append(history, openai.UserMessage(augmentedPrompt))
+		// // SSE 流式调用
+		// reply, err := llm.ProcessTaskStreamly(apiKey, task.ID, history, srv)
 
-		if err != nil {
-			log.Printf("LLM error: %v", err)
-			return
-		}
+		// if err != nil {
+		// 	log.Printf("LLM error: %v", err)
+		// 	return
+		// }
 		// TODO: 处理完成后更新 MySQL 和 Redis
 		log.Printf("task %s done", reply)
 		tk := pkg.Task{

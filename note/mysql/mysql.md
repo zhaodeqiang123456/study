@@ -195,7 +195,6 @@ D持久性 (Durability)：事务一旦提交，对数据的修改就是永久的
 
 > MySQL 默认的 REPEATABLE READ 已经解决了脏读和不可重复读，但在某些情况下仍可能出现幻读。面试常问如何防止幻读，答案是使用临键锁（Next-Key Lock），即行锁 + 间隙锁，锁定一个范围。
 
-
 ---
 
 ### mysql 锁策略
@@ -256,3 +255,32 @@ func updateTaskStatusOptimistic(taskID string) error {
     return nil
 }
 ```
+
+
+---
+
+##### SQL
+
+
+-- 会话表
+CREATE TABLE conversations (
+id          VARCHAR(64) NOT NULL,
+title       VARCHAR(255) DEFAULT '新对话',
+created_at  DATETIME NOT NULL,
+updated_at  DATETIME NOT NULL,
+PRIMARY KEY (id)
+);
+
+-- 消息表
+CREATE TABLE messages (
+id              BIGINT AUTO_INCREMENT,
+conversation_id VARCHAR(64) NOT NULL,
+role            VARCHAR(20) NOT NULL,  -- 'user' 或 'assistant'
+content         TEXT NOT NULL,
+created_at      DATETIME NOT NULL,
+PRIMARY KEY (id),
+INDEX idx_conversation_time (conversation_id, created_at)
+);
+
+
+ALTER TABLE tasks ADD COLUMN conversation_id VARCHAR(64);

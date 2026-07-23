@@ -2,9 +2,12 @@ package llm
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"simple_service/pkg"
+	"simple_service/pkg/agent"
 	"time"
 
 	"github.com/openai/openai-go"
@@ -17,6 +20,43 @@ const (
 	deepseekBaseURL = "https://api.deepseek.com/v1"
 	deepseekModel   = "deepseek-chat"
 )
+
+var tools []openai.ChatCompletionToolParam = []openai.ChatCompletionToolParam{
+	{
+		Type: "function",
+		Function: openai.FunctionDefinitionParam{
+			Name:        "calculator",
+			Description: openai.String("计算数学表达式，支持加减乘除"),
+			Parameters: openai.FunctionParameters{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"expression": map[string]interface{}{
+						"type":        "string",
+						"description": "数学表达式，例如 '2+3'",
+					},
+				},
+				"required": []string{"expression"},
+			},
+		},
+	},
+	{
+		Type: "function",
+		Function: openai.FunctionDefinitionParam{
+			Name:        "get_weather",
+			Description: openai.String("查询指定城市的天气"),
+			Parameters: openai.FunctionParameters{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"city": map[string]interface{}{
+						"type":        "string",
+						"description": "城市名称，例如北京",
+					},
+				},
+				"required": []string{"city"},
+			},
+		},
+	},
+}
 
 func CallDeepSeekWithSDK(apiKey, userPrompt string) (string, error) {
 	client := openai.NewClient(
@@ -111,4 +151,63 @@ func GetEmbedding(text string) ([]float32, error) {
 		embedding32[i] = float32(v)
 	}
 	return embedding32, nil
+}
+
+func CallDeepSeekWithTools(apiKey, userPrompt string) (string, error) {
+
+	messages := []openai.ChatCompletionMessageParamUnion{
+		openai.UserMessage(userPrompt),
+	}
+
+	var finalAnswer string
+	client := openai.NewClient(
+		option.WithAPIKey(apiKey),
+		option.WithBaseURL(deepseekBaseURL),
+	)
+
+	for range 10 {
+		completion, err := client.Chat.Completions.New(context.Background(), openai.ChatCompletionNewParams{
+			Model:    openai.ChatModel(deepseekModel), // 注意：v1.12.0 中 Model 可能是 string，如果是 openai.ChatModel 类型，可以这样写：openai.ChatModel("deepseek-chat")
+			Messages: messages,
+			Tools:    tools,
+		})
+		if err != nil {
+			log.Printf("LLM call error: %v", err)
+			return finalAnswer, err
+		}
+
+		msg := completion.Choices[0].Message
+		// 如果没有工具调用，直接返回回答
+		if len(msg.ToolCalls) == 0 {
+			log.Printf("Final answer: %s", msg.Content)
+			// 更新数据库、缓存...
+			finalAnswer = msg.Content
+			return finalAnswer, err
+		}
+
+		// 有工具调用，执行工具并将结果加入消息
+		// 先加入助手消息（带 tool_calls）
+		messages = append(messages, completion.Choices[0].Message.ToParam())
+
+		for _, tc := range msg.ToolCalls {
+			log.Printf("Executing tool: %s(%s)", tc.Function.Name, tc.Function.Arguments)
+
+			var args map[string]interface{}
+			if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err != nil {
+				log.Printf("arguments parse error: %v", err)
+				args = map[string]interface{}{}
+			}
+
+			result, err := agent.ExecuteTool(tc.Function.Name, args) // 调用你之前写的工具执行函数
+			if err != nil {
+				result = "错误: " + err.Error()
+			}
+
+			// 添加工具结果消息
+			messages = append(messages, openai.ToolMessage(result, tc.ID))
+		}
+		// 继续循环，让模型处理工具结果
+	}
+	// 如果 LLM 直接返回文本（没有工具调用），说明任务完成
+	return finalAnswer, nil
 }
