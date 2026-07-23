@@ -191,6 +191,25 @@
             color: var(--text-secondary);
             font-size: 18px;
         }
+        .tool-card {
+            background: #f0f4ff;
+            border-radius: 8px;
+            padding: 8px 12px;
+            margin: 8px 0;
+            font-size: 14px;
+            color: #4f46e5;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .tool-icon {
+            font-size: 16px;
+        }
+        .tool-result {
+            color: #047857;
+            font-weight: 500;
+            margin-left: 6px;
+        }
     </style>
 </head>
 <body>
@@ -371,41 +390,81 @@
         }
     }
 
-    async function tryStreamResult(taskId) {
-        try {
-            const response = await fetch(API_BASE + `/result/stream?id=${taskId}`);
-            if (!response.ok) return false;
-            removeLoadingIndicator();
-            const bubble = addMessage('assistant', '', false); // 空内容，准备逐字填充
-            const reader = response.body.getReader();
-            const decoder = new TextDecoder();
-            let buffer = '';
+   async function tryStreamResult(taskId) {
+    try {
+        const response = await fetch(API_BASE + `/result/stream?id=${taskId}`);
+        if (!response.ok) return false;
+        removeLoadingIndicator();
 
-            while (true) {
-                const { done, value } = await reader.read();
-                if (done) break;
-                buffer += decoder.decode(value, { stream: true });
-                const lines = buffer.split('\n');
-                buffer = lines.pop() || '';
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let assistantBubble = null; // 当前回复气泡
+        let lastToolCallCard = null; // 最近一个工具调用卡片
 
-                for (const line of lines) {
-                    if (line.startsWith('data: ')) {
-                        const data = line.slice(6).trim();
-                        if (data === '[DONE]') {
-                            console.log('流式完成');
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop() || '';
+
+            for (const line of lines) {
+                if (!line.startsWith('data: ')) continue;
+                const data = line.slice(6).trim();
+                if (data === '[DONE]' || data === '') continue;
+
+                try {
+                    const event = JSON.parse(data);
+                    switch (event.type) {
+                        case 'text_delta':
+                            // 创建或追加文本气泡
+                            if (!assistantBubble) {
+                                assistantBubble = addMessage('assistant', '', false);
+                            }
+                            assistantBubble.textContent += event.data;
+                            scrollToBottom();
+                            break;
+
+                        case 'tool_call':
+                            // 创建一个工具调用提示卡片
+                            const callCard = document.createElement('div');
+                            callCard.className = 'tool-card';
+                            callCard.innerHTML = `<span class="tool-icon">🔧</span> 调用 ${event.data.name} (${event.data.args})`;
+                            messagesEl.appendChild(callCard);
+                            lastToolCallCard = callCard;
+                            scrollToBottom();
+                            break;
+
+                        case 'tool_result':
+                            // 在对应的工具卡片后追加结果
+                            if (lastToolCallCard) {
+                                const resultSpan = document.createElement('span');
+                                resultSpan.className = 'tool-result';
+                                resultSpan.textContent = ' → ' + event.data.result;
+                                lastToolCallCard.appendChild(resultSpan);
+                            }
+                            break;
+
+                        case 'done':
+                            console.log('Agent 完成');
                             return true;
-                        }
-                        bubble.textContent += data;
-                        scrollToBottom();
+
+                        case 'error':
+                            addMessage('assistant', '❌ ' + event.data);
+                            return true;
                     }
+                } catch (e) {
+                    // 忽略解析错误，可能是旧格式数据
                 }
             }
-            return true;
-        } catch (e) {
-            console.warn('流式请求失败:', e);
-            return false;
         }
+        return true;
+    } catch (e) {
+        console.warn('流式请求失败:', e);
+        return false;
     }
+}
 
     async function pollUntilDone(taskId) {
         const maxAttempts = 60;
