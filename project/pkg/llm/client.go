@@ -19,7 +19,7 @@ import (
 
 const (
 	deepseekBaseURL = "https://api.deepseek.com/v1"
-	deepseekModel   = "deepseek-chat"
+	deepseekModel   = "deepseek-v4-flash"
 	maxIterations   = 10
 )
 
@@ -28,59 +28,10 @@ type AgentEvent struct {
 	Data interface{} `json:"data"`
 }
 
-var tools []openai.ChatCompletionToolParam = []openai.ChatCompletionToolParam{
-	{
-		Type: "function",
-		Function: openai.FunctionDefinitionParam{
-			Name:        "calculator",
-			Description: openai.String("计算数学表达式，支持加减乘除"),
-			Parameters: openai.FunctionParameters{
-				"type": "object",
-				"properties": map[string]interface{}{
-					"expression": map[string]interface{}{
-						"type":        "string",
-						"description": "数学表达式，例如 '2+3'",
-					},
-				},
-				"required": []string{"expression"},
-			},
-		},
-	},
-	{
-		Type: "function",
-		Function: openai.FunctionDefinitionParam{
-			Name:        "get_weather",
-			Description: openai.String("查询指定城市的天气"),
-			Parameters: openai.FunctionParameters{
-				"type": "object",
-				"properties": map[string]interface{}{
-					"city": map[string]interface{}{
-						"type":        "string",
-						"description": "城市名称，例如北京",
-					},
-				},
-				"required": []string{"city"},
-			},
-		},
-	},
-	{
-		Type: "function",
-		Function: openai.FunctionDefinitionParam{
-			Name:        "search_knowledge",
-			Description: openai.String("搜索本地知识库，获取与查询相关的文档片段。当需要了解特定领域的知识（如公司政策、产品信息、技术规范）时使用。"),
-			Parameters: openai.FunctionParameters{
-				"type": "object",
-				"properties": map[string]interface{}{
-					"query": map[string]interface{}{
-						"type":        "string",
-						"description": "搜索查询，应使用完整的问题或关键词",
-					},
-				},
-				"required": []string{"query"},
-			},
-		},
-	},
-}
+var (
+	config   *agent.AgentConfig
+	toolList []openai.ChatCompletionToolParam
+)
 
 func CallDeepSeekWithSDK(apiKey, userPrompt string) (string, error) {
 	client := openai.NewClient(
@@ -180,6 +131,7 @@ func GetEmbedding(text string) ([]float32, error) {
 func CallDeepSeekWithToolsAndSSE(apiKey string, taskID string, history []openai.ChatCompletionMessageParamUnion, srv *pkg.Service) (string, error) {
 
 	messages := history
+	messages = append(messages, openai.SystemMessage(config.SystemPrompt))
 	streamKey := "stream:" + taskID
 
 	// 设置过期时间，避免内存泄漏
@@ -199,9 +151,10 @@ func CallDeepSeekWithToolsAndSSE(apiKey string, taskID string, history []openai.
 		fullText.Reset()
 		// 发送流式请求（stream: true）
 		stream := client.Chat.Completions.NewStreaming(context.Background(), openai.ChatCompletionNewParams{
-			Model:    openai.ChatModel(deepseekModel), // 注意：v1.12.0 中 Model 可能是 string，如果是 openai.ChatModel 类型，可以这样写：openai.ChatModel("deepseek-chat")
-			Messages: messages,
-			Tools:    tools,
+			Model:       config.Model, // 注意：v1.12.0 中 Model 可能是 string，如果是 openai.ChatModel 类型，可以这样写：openai.ChatModel("deepseek-chat")
+			Messages:    messages,
+			Tools:       toolList,
+			Temperature: openai.Float(config.Temperature),
 		})
 
 		var curToolCalls []openai.ChatCompletionChunkChoiceDeltaToolCall
@@ -222,6 +175,7 @@ func CallDeepSeekWithToolsAndSSE(apiKey string, taskID string, history []openai.
 			// 如果有文本内容
 			if delta.Content != "" {
 				fullText.WriteString(delta.Content)
+
 				// 推送文本增量事件到 Redis
 				// 推入 Redis 列表
 				pushEvent(rdb, streamKey, AgentEvent{
@@ -315,4 +269,27 @@ func CallDeepSeekWithToolsAndSSE(apiKey string, taskID string, history []openai.
 func pushEvent(rdb *redis.Client, streamKey string, event AgentEvent) {
 	data, _ := json.Marshal(event)
 	rdb.RPush(context.Background(), streamKey, string(data))
+}
+
+func Init() {
+	// 加载配置（路径可改为绝对路径或通过环境变量指定）
+	var err error
+	config, err = agent.LoadConfig(`D:\study\projects\study\project\config\agent.md`)
+	if err != nil {
+		log.Fatalf("加载 Agent 配置失败: %v", err)
+	}
+
+	// 将工具定义转换为 OpenAI 兼容格式
+	for _, td := range config.Tools {
+		toolList = append(toolList, openai.ChatCompletionToolParam{
+			Type: "function",
+			Function: openai.FunctionDefinitionParam{
+				Name: td.Name,
+				Description: param.Opt[string]{
+					Value: td.Description,
+				},
+				Parameters: openai.FunctionParameters(td.Parameters), // 直接转换
+			},
+		})
+	}
 }

@@ -42,7 +42,8 @@ func main() {
 	srv.CreateCollection()
 	// 预加载文本数据，插入向量数据库
 	rag.LoadKnowledgeBase()
-
+	// 加载agent的config
+	llm.Init()
 	for {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		msg, err := reader.ReadMessage(ctx)
