@@ -9,7 +9,10 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"simple_service/pkg/llm"
+	"time"
 
+	"github.com/google/uuid"
 	"github.com/pkoukk/tiktoken-go"
 )
 
@@ -36,21 +39,39 @@ func splitByTokens(text string, maxTokens int, overlap int) ([]string, error) {
 	return chunks, nil
 }
 
-// ==================== 2. Embedding 调用 ====================
+// ==================== 2. Embedding 调用（已移至 pkg/llm） ====================
 
-// ==================== 3. 批量写入 Qdrant（HTTP） ====================
+// ==================== 3. 写入 Qdrant（HTTP，结构体保证字段顺序） ====================
 const qdrantBaseURL = "http://localhost:6333"
 
-func upsertPoints(points []map[string]interface{}) error {
+// Qdrant 1.18 对 JSON 字段顺序敏感，必须用 struct 而非 map
+type qdrantPoint struct {
+	ID      string            `json:"id"`
+	Vector  []float32         `json:"vector"`
+	Payload map[string]string `json:"payload"`
+}
+
+type upsertRequest struct {
+	Points []qdrantPoint `json:"points"`
+}
+
+// upsertPoint 单点写入 Qdrant
+func upsertPoint(id string, vector []float32, payload map[string]string) error {
 	url := fmt.Sprintf("%s/collections/knowledge_base/points?wait=true", qdrantBaseURL)
-	body, err := json.Marshal(map[string]interface{}{
-		"points": points,
+	body, err := json.Marshal(upsertRequest{
+		Points: []qdrantPoint{{ID: id, Vector: vector, Payload: payload}},
 	})
 	if err != nil {
 		return fmt.Errorf("序列化点失败: %w", err)
 	}
 
-	resp, err := http.Post(url, "application/json", bytes.NewReader(body))
+	req, err := http.NewRequest(http.MethodPut, url, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("创建请求失败: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("HTTP请求失败: %w", err)
 	}
@@ -65,10 +86,8 @@ func upsertPoints(points []map[string]interface{}) error {
 
 // ==================== 4. 加载知识库主函数 ====================
 func LoadKnowledgeBase() ([]string, error) {
-	dir := `D:\study\projects\study\project\pkg\rag\documents`
+	dir := "pkg/rag/documents" // 基于消费者工作目录的相对路径
 	log.Printf("[RAG] 文档目录: %s", dir)
-	pattern := filepath.Join(dir, "*.txt")
-	log.Printf("[RAG] 搜索模式: %s", pattern)
 	files, err := filepath.Glob(filepath.Join(dir, "*.txt"))
 	if err != nil {
 		return nil, fmt.Errorf("查找文档失败: %w", err)
@@ -92,53 +111,39 @@ func LoadKnowledgeBase() ([]string, error) {
 			log.Printf("[RAG] 切片失败 %s: %v", file, err)
 			continue
 		}
-		// ========================================== 接入向量数据库
-		// var points []map[string]interface{}
-		// for _, chunk := range chunks {
-		// 	// 调用 Embedding 获取向量
-		// 	vec, err := llm.GetEmbedding(chunk)
-		// 	if err != nil {
-		// 		log.Printf("[RAG] Embedding 失败: %v", err)
-		// 		continue
-		// 	}
 
-		// 	// 构造一个 Point
-		// 	point := map[string]interface{}{
-		// 		"id":     uuid.New().String(),
-		// 		"vector": vec, // []float32
-		// 		"payload": map[string]string{
-		// 			"text":   chunk,
-		// 			"source": file,
-		// 		},
-		// 	}
-		// 	points = append(points, point)
-
-		// 	// 避免超过 DeepSeek 频率限制，每次调用后短暂休息
-		// 	time.Sleep(200 * time.Millisecond)
-		// }
-
-		// // 分批写入 Qdrant，每批 100 个
-		// batchSize := 100
-		// for i := 0; i < len(points); i += batchSize {
-		// 	end := i + batchSize
-		// 	if end > len(points) {
-		// 		end = len(points)
-		// 	}
-		// 	if err := upsertPoints(points[i:end]); err != nil {
-		// 		log.Printf("[RAG] 入库失败: %v", err)
-		// 		continue
-		// 	}
-		// }
-		// log.Printf("[RAG] 文件 %s 已成功入库 (%d 个片段)", file, len(points))
+		// ===== 接入向量数据库：Embedding → Qdrant 逐点入库 =====
+		pointCount := 0
 		for _, chunk := range chunks {
-			documentChunks = append(documentChunks, chunk)
+			// 调用 Embedding 获取向量
+			vec, err := llm.GetEmbedding(chunk)
+			if err != nil {
+				log.Printf("[RAG] Embedding 失败: %v", err)
+				continue
+			}
+
+			// 逐点写入 Qdrant
+			if err := upsertPoint(uuid.New().String(), vec, map[string]string{
+				"text":   chunk,
+				"source": file,
+			}); err != nil {
+				log.Printf("[RAG] 入库失败: %v", err)
+				continue
+			}
+			pointCount++
+
+			// 避免超过 API 频率限制
+			time.Sleep(200 * time.Millisecond)
 		}
-		log.Printf("[RAG] 文件 %s 已成功加载入内存 (%d 个片段)", file, len(documentChunks))
+		log.Printf("[RAG] 文件 %s 已成功入库 (%d 个片段)", file, pointCount)
+
+		// 同时保留到内存供关键词检索兜底
+		documentChunks = append(documentChunks, chunks...)
 	}
-	return documentChunks, err
+	return documentChunks, nil
 }
 
-// 向量数据库检索
+// ==================== 5. 向量检索 ====================
 func SearchByVector(queryVector []float32, limit int) ([]string, error) {
 	url := "http://localhost:6333/collections/knowledge_base/points/search"
 	body, _ := json.Marshal(map[string]interface{}{

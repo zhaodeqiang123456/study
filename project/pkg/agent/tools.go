@@ -8,6 +8,12 @@ import (
 	"github.com/openai/openai-go"
 )
 
+// 函数注入：由 consumer 在启动时填入具体实现，避免循环依赖
+var (
+	EmbeddingFunc    func(string) ([]float32, error)
+	VectorSearchFunc func([]float32, int) ([]string, error)
+)
+
 // ExecuteTool 根据工具名称执行对应函数
 func ExecuteTool(name string, args map[string]interface{}) (string, error) {
 	switch name {
@@ -79,59 +85,31 @@ func getWeatherTool(city string) (string, error) {
 	return fmt.Sprintf("未找到 %s 的天气信息", city), nil
 }
 
-// rag 增强检索  --- 关键字匹配简易版
+// rag 向量增强检索
 func searchKnowledgeTool(query string) (string, error) {
+	// 1. 获取查询向量
+	if EmbeddingFunc == nil {
+		return "", fmt.Errorf("Embedding 服务未初始化")
+	}
+	queryVector, err := EmbeddingFunc(query)
+	if err != nil {
+		return "", fmt.Errorf("查询 Embedding 失败: %w", err)
+	}
 
-	// keywords := strings.Fields(query)
-	var results string
-	// for _, chunk := range documentChunks {
-	// 	for _, kw := range keywords {
-	// 		if strings.Contains(chunk, kw) {
-	// 			results = append(results, chunk)
-	// 			break
-	// 		}
-	// 	}
-	// }
-	// log.Printf("[RAG] 文件已成功匹配 (%d 个片段), 原文件含有 %d 个片段", len(results), len(documentChunks))
+	// 2. 向量检索
+	if VectorSearchFunc == nil {
+		return "", fmt.Errorf("向量检索服务未初始化")
+	}
+	docs, err := VectorSearchFunc(queryVector, 3)
+	if err != nil {
+		return "", fmt.Errorf("向量检索失败: %w", err)
+	}
+	if len(docs) == 0 {
+		return "未找到相关文档", nil
+	}
 
-	// ==================== 向量检索 ====================
-	// queryVector, _ := llm.GetEmbedding(task.Prompt)
-	// // 检索相关文档
-	// var docs []string
-	// if queryVector != nil {
-	// 	docs, err = rag.SearchByVector(queryVector, 3)
-	// 	if err != nil {
-	// 		log.Printf("search error: %v", err)
-	// 		docs = nil
-	// 	}
-	// }
-
-	// ========================= 关键词搜索 =============
-	// docs := searchByKeyword(task.Prompt)
-	// // 构建增强 prompt
-	// augmentedPrompt := task.Prompt
-	// if len(docs) > 0 {
-	// 	augmentedPrompt = fmt.Sprintf(
-	// 		"你是一个专业的AI助手。以下是可能相关的参考资料：\n\n%s\n\n"+
-	// 			"用户问题：%s\n\n"+
-	// 			"请根据参考资料提供准确答案，并在此基础上适当补充背景知识、实际案例或相关技术细节，使回答更加丰富和有用。",
-	// 		strings.Join(docs, "\n\n"),
-	// 		task.Prompt,
-	// 	)
-	// }
-
-	// // ==================== 流式调用 ====================
-	// history := dbService.QueryHistory(task.ConversationID)
-	// // 把增强的prompt追加到最后
-	// history = append(history, openai.UserMessage(augmentedPrompt))
-	// // SSE 流式调用
-	// reply, err = llm.ProcessTaskStreamly(apiKey, task.ID, history, srv)
-
-	// if err != nil {
-	// 	log.Printf("LLM error: %v", err)
-	// 	return
-	// }
-	return results, nil
+	// 3. 拼接检索结果作为参考上下文
+	return strings.Join(docs, "\n\n---\n\n"), nil
 }
 
 func MergeDeltaToolCalls(

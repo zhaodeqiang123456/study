@@ -7,6 +7,7 @@ import (
 	"os"
 	"simple_service/pkg"
 	"simple_service/pkg/llm"
+	"simple_service/pkg/agent"
 	"simple_service/pkg/rag"
 	"time"
 
@@ -44,10 +45,13 @@ func main() {
 	rag.LoadKnowledgeBase()
 	// 加载agent的config
 	llm.Init()
+	// 注入函数实现，避免循环依赖
+	agent.EmbeddingFunc = llm.GetEmbedding
+	agent.VectorSearchFunc = rag.SearchByVector
 	for {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		msg, err := reader.ReadMessage(ctx)
-		defer cancel()
+		cancel() // 立即释放，避免 for 循环中泄漏
 		if err != nil {
 			log.Printf("read message error: %v", err)
 			continue

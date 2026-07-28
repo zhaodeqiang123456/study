@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"simple_service/pkg"
 	"simple_service/pkg/agent"
@@ -100,32 +101,53 @@ func ProcessTaskStreamly(apiKey, taskID string, messages []openai.ChatCompletion
 }
 
 func GetEmbedding(text string) ([]float32, error) {
-	client := openai.NewClient(
-		option.WithAPIKey(os.Getenv("DEEPSEEK_API_KEY")),
-		option.WithBaseURL("https://api.deepseek.com/v1"),
-	)
+	// ===== 基于词汇哈希的本地 Embedding =====
+	// TODO: 当有真实 Embedding API 时替换此实现
+	const dim = 1536
+	vector := make([]float32, dim)
 
-	// Model 字段直接使用字符串常量
-	// Input 字段使用 SDK 提供的构造函数 EmbeddingNewParamsInputArrayOfStrings
-	resp, err := client.Embeddings.New(context.Background(), openai.EmbeddingNewParams{
-		Model: openai.EmbeddingModelTextEmbedding3Small,
-		Input: openai.EmbeddingNewParamsInputUnion{
-			OfString: param.NewOpt(text), // 将 string 包装为 param.Opt
-		},
+	// 分词：按空白和标点拆分
+	text = strings.ToLower(text)
+	words := strings.FieldsFunc(text, func(r rune) bool {
+		return !('a' <= r && r <= 'z' || '0' <= r && r <= '9' ||
+			r >= 0x4e00 && r <= 0x9fff) // 保留中文、英文、数字
 	})
-	if err != nil {
-		return nil, fmt.Errorf("embedding failed: %w", err)
+
+	for _, word := range words {
+		if len(word) == 0 {
+			continue
+		}
+		// 对每个词，在向量中激活 4 个位置
+		h := hashWord(word)
+		for j := uint32(0); j < 4; j++ {
+			pos := int((h + j*0x9E3779B9) % dim)
+			vector[pos] += 1.0
+		}
 	}
-	if len(resp.Data) == 0 {
-		return nil, fmt.Errorf("no embedding returned")
+
+	// L2 归一化
+	var norm float64
+	for _, v := range vector {
+		norm += float64(v * v)
 	}
-	embedding64 := resp.Data[0].Embedding
-	// 转换为 []float32
-	embedding32 := make([]float32, len(embedding64))
-	for i, v := range embedding64 {
-		embedding32[i] = float32(v)
+	if norm > 1e-8 {
+		inv := float32(1.0 / math.Sqrt(norm))
+		for i := range vector {
+			vector[i] *= inv
+		}
 	}
-	return embedding32, nil
+
+	return vector, nil
+}
+
+// hashWord 对单个词计算 32 位哈希
+func hashWord(s string) uint32 {
+	var h uint32 = 2166136261
+	for i := 0; i < len(s); i++ {
+		h ^= uint32(s[i])
+		h *= 16777619
+	}
+	return h
 }
 
 func CallDeepSeekWithToolsAndSSE(apiKey string, taskID string, history []openai.ChatCompletionMessageParamUnion, srv *pkg.Service) (string, error) {
@@ -274,7 +296,11 @@ func pushEvent(rdb *redis.Client, streamKey string, event AgentEvent) {
 func Init() {
 	// 加载配置（路径可改为绝对路径或通过环境变量指定）
 	var err error
-	config, err = agent.LoadConfig(`D:\study\projects\study\project\config\agent.md`)
+	configPath := os.Getenv("AGENT_CONFIG_PATH")
+	if configPath == "" {
+		configPath = "config/agent.md"
+	}
+	config, err = agent.LoadConfig(configPath)
 	if err != nil {
 		log.Fatalf("加载 Agent 配置失败: %v", err)
 	}

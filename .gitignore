@@ -2,3 +2,9 @@
 .env
 .claude
 conversations
+storage
+*.exe
+scripts
+dump.rdb
+.qdrant-initialized
+*.log
