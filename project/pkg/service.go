@@ -199,8 +199,8 @@ func (s *Service) handlePostTask(w http.ResponseWriter, r *http.Request) {
 	taskID := store.Create()
 	task, _ := store.Get(taskID)
 	task.ConversationID = req.ConversationID
+	// 将task插入数据库
 	go func() {
-		// 将task插入数据库
 		var dbService *DbService = GetInstance[DbService](s)
 		err := dbService.InsertTask(task)
 		if err != nil {

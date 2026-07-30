@@ -38,5 +38,5 @@ func main() {
 
 	// 6. 关闭后，Service() 返回，main 继续执行，此时 defer inst.detach() 自动执行
 	log.Println("服务已安全退出")
-
+	
 }

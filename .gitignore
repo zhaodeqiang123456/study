@@ -8,3 +8,4 @@ scripts
 dump.rdb
 .qdrant-initialized
 *.log
+.tools
