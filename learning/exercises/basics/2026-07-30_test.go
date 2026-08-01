@@ -66,7 +66,7 @@ func TestMinDistinctWindow(t *testing.T) {
 		{"one distinct", []int{1, 1, 1}, 1, 1},
 		{"not enough distinct", []int{1, 2, 3}, 4, 0},
 		{"normal", []int{1, 2, 3}, 2, 2},
-		{"special case", []int{1, 1, 3}, 2, 2},
+		{"shrink then expand again", []int{1, 2, 1, 3, 2}, 3, 3},
 	}
 
 	for _, tt := range tests {
