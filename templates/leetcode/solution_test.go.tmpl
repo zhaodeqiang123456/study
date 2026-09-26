@@ -1,0 +1,28 @@
+package leetcode
+
+import (
+	"slices" // 返回值是切片时用；比大小用 == 就够的话可以删掉
+	"testing"
+)
+
+func TestSolutionName(t *testing.T) {
+	cases := []struct {
+		name string
+		// 输入放这里
+		want int // 返回值类型
+	}{
+		{"题目给的例子", 0},
+		{"边界：空输入 / 只有一个元素", 0},
+		{"边界：重复元素 / 极值", 0},
+		{"我自己写错过的那组", 0},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := solutionName( /* 输入 */ )
+			if got != c.want { // 返回值是切片就用 !slices.Equal(got, c.want)
+				t.Errorf("solutionName(...) = %v, 期望 %v", got, c.want)
+			}
+		})
+	}
+}

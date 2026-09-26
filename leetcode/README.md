@@ -23,6 +23,8 @@ go test ./...           # 跑全部题的自测
 go test -run TwoSum -v  # 只跑某一道
 ```
 
+嫌手写骨架麻烦，就从 `templates/leetcode/` 里复制两个模板（`solution.go.tmpl`、`solution_test.go.tmpl`）改名填空。
+
 如果报构建缓存 `Access is denied` 之类的错，先设一次缓存目录：`$env:GOCACHE = "$env:TEMP\gocache"`。
 
 ## 为什么要留代码
