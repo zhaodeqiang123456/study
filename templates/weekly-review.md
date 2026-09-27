@@ -1,4 +1,4 @@
-<!-- 周复盘模板：复制成 review/weekly-{{WEEK}}.md -->
+<!-- 周复盘模板：由 Agent 根据 progress.md、daily/、leetcode/、review/ 和 Git 记录自动生成或更新，用户不需要手填。 -->
 # 周复盘 · 第 {{WEEK_NO}} 周（{{START}} ~ {{END}}）
 
 | 指标 | 本周 | 累计 |
