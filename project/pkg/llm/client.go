@@ -2,15 +2,36 @@ package llm
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"log"
+	"math"
+	"os"
+	"simple_service/pkg"
+	"simple_service/pkg/agent"
+	"strings"
+	"time"
 
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
+	"github.com/openai/openai-go/packages/param"
+	"github.com/redis/go-redis/v9"
 )
 
 const (
 	deepseekBaseURL = "https://api.deepseek.com/v1"
-	deepseekModel   = "deepseek-chat"
+	deepseekModel   = "deepseek-v4-flash"
+	maxIterations   = 10
+)
+
+type AgentEvent struct {
+	Type string      `json:"type"` // text_delta, tool_call, tool_result, done
+	Data interface{} `json:"data"`
+}
+
+var (
+	config   *agent.AgentConfig
+	toolList []openai.ChatCompletionToolParam
 )
 
 func CallDeepSeekWithSDK(apiKey, userPrompt string) (string, error) {
@@ -33,4 +54,268 @@ func CallDeepSeekWithSDK(apiKey, userPrompt string) (string, error) {
 		return "", fmt.Errorf("no choices")
 	}
 	return completion.Choices[0].Message.Content, nil
+}
+
+// 流式处理，每收到一个 chunk 就 RPUSH 到 Redis
+func ProcessTaskStreamly(apiKey, taskID string, messages []openai.ChatCompletionMessageParamUnion, srv *pkg.Service) (fullResponse string, err error) {
+	// ... 幂等性检查、事务等
+
+	streamKey := "stream:" + taskID
+	// 设置过期时间，避免内存泄漏
+	var rdb *redis.Client = pkg.GetInstance[redis.Client](srv)
+	// ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	// defer cancel()
+	rdb.Expire(context.Background(), streamKey, 10*time.Minute)
+
+	client := openai.NewClient(
+		option.WithAPIKey(apiKey),
+		option.WithBaseURL(deepseekBaseURL),
+	)
+	// 构造流式请求
+	stream := client.Chat.Completions.NewStreaming(context.Background(), openai.ChatCompletionNewParams{
+		Model:    openai.ChatModel("deepseek-chat"),
+		Messages: messages,
+	})
+	defer stream.Close()
+
+	for stream.Next() {
+		chunk := stream.Current()
+		if len(chunk.Choices) > 0 {
+			delta := chunk.Choices[0].Delta.Content
+			if delta != "" {
+				// 推入 Redis 列表
+				rdb.RPush(context.Background(), streamKey, delta)
+				fullResponse += delta
+			}
+		}
+	}
+	if err := stream.Err(); err != nil {
+		rdb.RPush(context.Background(), streamKey, "[ERROR] "+err.Error())
+		return fullResponse, err
+	}
+
+	// 流结束后，推送一个特殊结束标记
+	rdb.RPush(context.Background(), streamKey, "[DONE]")
+
+	return fullResponse, err
+}
+
+func GetEmbedding(text string) ([]float32, error) {
+	// ===== 基于词汇哈希的本地 Embedding =====
+	// TODO: 当有真实 Embedding API 时替换此实现
+	const dim = 1536
+	vector := make([]float32, dim)
+
+	// 分词：按空白和标点拆分
+	text = strings.ToLower(text)
+	words := strings.FieldsFunc(text, func(r rune) bool {
+		return !('a' <= r && r <= 'z' || '0' <= r && r <= '9' ||
+			r >= 0x4e00 && r <= 0x9fff) // 保留中文、英文、数字
+	})
+
+	for _, word := range words {
+		if len(word) == 0 {
+			continue
+		}
+		// 对每个词，在向量中激活 4 个位置
+		h := hashWord(word)
+		for j := uint32(0); j < 4; j++ {
+			pos := int((h + j*0x9E3779B9) % dim)
+			vector[pos] += 1.0
+		}
+	}
+
+	// L2 归一化
+	var norm float64
+	for _, v := range vector {
+		norm += float64(v * v)
+	}
+	if norm > 1e-8 {
+		inv := float32(1.0 / math.Sqrt(norm))
+		for i := range vector {
+			vector[i] *= inv
+		}
+	}
+
+	return vector, nil
+}
+
+// hashWord 对单个词计算 32 位哈希
+func hashWord(s string) uint32 {
+	var h uint32 = 2166136261
+	for i := 0; i < len(s); i++ {
+		h ^= uint32(s[i])
+		h *= 16777619
+	}
+	return h
+}
+
+func CallDeepSeekWithToolsAndSSE(apiKey string, taskID string, history []openai.ChatCompletionMessageParamUnion, srv *pkg.Service) (string, error) {
+
+	messages := history
+	messages = append(messages, openai.SystemMessage(config.SystemPrompt))
+	streamKey := "stream:" + taskID
+
+	// 设置过期时间，避免内存泄漏
+	var rdb *redis.Client = pkg.GetInstance[redis.Client](srv)
+	// ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	// defer cancel()
+	rdb.Expire(context.Background(), streamKey, 10*time.Minute)
+
+	var fullText strings.Builder
+	client := openai.NewClient(
+		option.WithAPIKey(apiKey),
+		option.WithBaseURL(deepseekBaseURL),
+	)
+
+	for range maxIterations {
+
+		fullText.Reset()
+		// 发送流式请求（stream: true）
+		stream := client.Chat.Completions.NewStreaming(context.Background(), openai.ChatCompletionNewParams{
+			Model:       config.Model, // 注意：v1.12.0 中 Model 可能是 string，如果是 openai.ChatModel 类型，可以这样写：openai.ChatModel("deepseek-chat")
+			Messages:    messages,
+			Tools:       toolList,
+			Temperature: openai.Float(config.Temperature),
+		})
+
+		var curToolCalls []openai.ChatCompletionChunkChoiceDeltaToolCall
+
+		// 读取流式响应
+		for stream.Next() {
+			chunk := stream.Current()
+			if len(chunk.Choices) == 0 {
+				continue
+			}
+			delta := chunk.Choices[0].Delta
+
+			// 如果有工具调用
+			if len(delta.ToolCalls) > 0 {
+				curToolCalls = agent.MergeDeltaToolCalls(curToolCalls, delta.ToolCalls)
+			}
+
+			// 如果有文本内容
+			if delta.Content != "" {
+				fullText.WriteString(delta.Content)
+
+				// 推送文本增量事件到 Redis
+				// 推入 Redis 列表
+				pushEvent(rdb, streamKey, AgentEvent{
+					Type: "text_delta",
+					Data: delta.Content,
+				})
+			}
+
+		}
+
+		if err := stream.Err(); err != nil {
+			pushEvent(rdb, streamKey, AgentEvent{Type: "error", Data: err.Error()})
+			return fullText.String(), err
+		}
+
+		// 循环结束后，如果有工具调用，转换为 MessageToolCall 并构造消息
+		if len(curToolCalls) > 0 {
+
+			// 推送工具调用事件
+			for _, tc := range curToolCalls {
+				pushEvent(rdb, streamKey, AgentEvent{
+					Type: "tool_call",
+					Data: map[string]string{
+						"name": tc.Function.Name,
+						"args": tc.Function.Arguments,
+					},
+				})
+			}
+			// 构造消息级别的工具调用列表
+			var msgToolCalls []openai.ChatCompletionMessageToolCallParam
+			for _, dtc := range curToolCalls {
+				msgToolCalls = append(msgToolCalls, openai.ChatCompletionMessageToolCallParam{
+					ID:   dtc.ID, // 流式过程中 ID 可能为空，但一般第一个 chunk 就有
+					Type: "function",
+					Function: openai.ChatCompletionMessageToolCallFunctionParam{
+						Name:      dtc.Function.Name,
+						Arguments: dtc.Function.Arguments,
+					},
+				})
+			}
+			// 加入助手消息（带 tool_calls）
+			assistantMsg := openai.ChatCompletionMessageParamUnion{
+				OfAssistant: &openai.ChatCompletionAssistantMessageParam{
+					Content: openai.ChatCompletionAssistantMessageParamContentUnion{
+						OfString: openai.String(fullText.String()),
+					},
+					ToolCalls: msgToolCalls,
+				},
+			}
+			messages = append(messages, assistantMsg)
+			// 将本轮请求返回的所有工具调用执行并将结果append到messages中
+			for _, tc := range msgToolCalls {
+				log.Printf("Executing tool: %s(%s)", tc.Function.Name, tc.Function.Arguments)
+
+				var args map[string]interface{}
+				if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err != nil {
+					log.Printf("arguments parse error: %v", err)
+					args = map[string]interface{}{}
+				}
+
+				result, err := agent.ExecuteTool(tc.Function.Name, args) // 调用你之前写的工具执行函数
+				if err != nil {
+					result = "错误: " + err.Error()
+				}
+				// 推送工具结果
+				pushEvent(rdb, streamKey, AgentEvent{
+					Type: "tool_result",
+					Data: map[string]string{
+						"name":   tc.Function.Name,
+						"result": result,
+					},
+				})
+				// 添加工具结果消息
+				messages = append(messages, openai.ToolMessage(result, tc.ID))
+			}
+
+		} else {
+			break
+		}
+
+		// 继续循环，让模型处理工具结果
+	}
+
+	// 没有工具调用，最终文本已通过 text_delta 推送完毕，只需告知 done
+	pushEvent(rdb, streamKey, AgentEvent{Type: "done", Data: ""})
+
+	// 如果 LLM 直接返回文本（没有工具调用），说明任务完成, 再次通过SSE接口，流式返回
+	return fullText.String(), nil
+}
+
+func pushEvent(rdb *redis.Client, streamKey string, event AgentEvent) {
+	data, _ := json.Marshal(event)
+	rdb.RPush(context.Background(), streamKey, string(data))
+}
+
+func Init() {
+	// 加载配置（路径可改为绝对路径或通过环境变量指定）
+	var err error
+	configPath := os.Getenv("AGENT_CONFIG_PATH")
+	if configPath == "" {
+		configPath = "config/agent.md"
+	}
+	config, err = agent.LoadConfig(configPath)
+	if err != nil {
+		log.Fatalf("加载 Agent 配置失败: %v", err)
+	}
+
+	// 将工具定义转换为 OpenAI 兼容格式
+	for _, td := range config.Tools {
+		toolList = append(toolList, openai.ChatCompletionToolParam{
+			Type: "function",
+			Function: openai.FunctionDefinitionParam{
+				Name: td.Name,
+				Description: param.Opt[string]{
+					Value: td.Description,
+				},
+				Parameters: openai.FunctionParameters(td.Parameters), // 直接转换
+			},
+		})
+	}
 }

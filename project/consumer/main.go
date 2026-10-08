@@ -4,33 +4,54 @@ import (
 	"context"
 	"encoding/json"
 	"log"
+	"os"
+	"simple_service/pkg"
 	"simple_service/pkg/llm"
+	"simple_service/pkg/agent"
+	"simple_service/pkg/rag"
 	"time"
 
+	"github.com/joho/godotenv"
+	"github.com/openai/openai-go"
+	"github.com/redis/go-redis/v9"
 	"github.com/segmentio/kafka-go"
 )
 
 type TaskMessage struct {
-	ID     string `json:"id"`
-	Prompt string `json:"prompt"`
+	ID             string `json:"id"`
+	Prompt         string `json:"prompt"`
+	ConversationID string `json:"conversation_id"`
 }
 
 func main() {
-	reader := kafka.NewReader(kafka.ReaderConfig{
-		Brokers:  []string{"localhost:9092"},
-		Topic:    "task-queue",
-		GroupID:  "task-consumer-group", // 消费者组，随便取
-		MinBytes: 10e3,
-		MaxBytes: 10e6,
-	})
-	defer reader.Close()
 
+	srv := pkg.NewService() //构建服务
 	log.Println("Kafka consumer started...")
-
+	// 加载 .env 文件（如果不存在则跳过）
+	if err := godotenv.Load(); err != nil {
+		log.Println("No .env file found, using system env")
+	}
+	// 获取大语言模型的apikey
+	apiKey := os.Getenv("DEEPSEEK_API_KEY")
+	if apiKey == "" {
+		log.Fatal("DEEPSEEK_API_KEY not set")
+	}
+	var reader *kafka.Reader = pkg.GetInstance[kafka.Reader](srv)
+	var dbService *pkg.DbService = pkg.GetInstance[pkg.DbService](srv)
+	var rdb *redis.Client = pkg.GetInstance[redis.Client](srv)
+	// 建立qrant向量数据库连接
+	srv.CreateCollection()
+	// 预加载文本数据，插入向量数据库
+	rag.LoadKnowledgeBase()
+	// 加载agent的config
+	llm.Init()
+	// 注入函数实现，避免循环依赖
+	agent.EmbeddingFunc = llm.GetEmbedding
+	agent.VectorSearchFunc = rag.SearchByVector
 	for {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		msg, err := reader.ReadMessage(ctx)
-		cancel()
+		cancel() // 立即释放，避免 for 循环中泄漏
 		if err != nil {
 			log.Printf("read message error: %v", err)
 			continue
@@ -44,16 +65,47 @@ func main() {
 		}
 		log.Printf("processing task %s, prompt: %s", task.ID, task.Prompt)
 
-		apiKey := ""
-		// 调用 DeepSeek（或你封装好的 llm.CallDeepSeek）
-		reply, err := llm.CallDeepSeekWithSDK(apiKey, task.Prompt)
+		// ===================  context 上下文记忆获取 ===================
+		history := dbService.QueryHistory(task.ConversationID)
+		history = append(history, openai.UserMessage(task.Prompt))
+
+		// 调用 DeepSeek
+		reply, err := llm.CallDeepSeekWithToolsAndSSE(apiKey, task.ID, history, srv)
 		if err != nil {
 			log.Printf("LLM error: %v", err)
 			reply = "AI 服务暂时不可用，请稍后重试"
 		}
 
 		// TODO: 处理完成后更新 MySQL 和 Redis
-		log.Printf("task %s done", reply)
+		go func() {
+			log.Printf("task %s done", reply)
+			tk := pkg.Task{
+				ID:     task.ID,
+				Prompt: task.Prompt,
+				Result: reply,
+				Status: "done",
+			}
+			dbService.CompleteTaskWithLog(&tk)
+			// 删除缓存（如果有）
+			_, err = rdb.Get(ctx, "task:"+task.ID).Result()
+			if err == nil {
+				rdb.Del(ctx, "task:"+task.ID)
+			}
 
+			// 事务：插入两条消息并更新会话
+			tx, _ := dbService.GetdbInstance().Begin()
+			tx.Exec("INSERT INTO messages (conversation_id, role, content, created_at) VALUES (?, 'user', ?, NOW())", task.ConversationID, task.Prompt)
+			tx.Exec("INSERT INTO messages (conversation_id, role, content, created_at) VALUES (?, 'assistant', ?, NOW())", task.ConversationID, reply)
+			tx.Exec("UPDATE conversations SET updated_at = NOW(), title = ? WHERE id = ? AND title = '新对话'", truncateText(task.Prompt, 20), task.ConversationID)
+			tx.Commit()
+		}()
 	}
+}
+
+func truncateText(s string, maxLen int) string {
+	runes := []rune(s) // 正确处理中文等多字节字符
+	if len(runes) <= maxLen {
+		return s
+	}
+	return string(runes[:maxLen]) + "..."
 }

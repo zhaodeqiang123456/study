@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"time"
 
 	_ "github.com/go-sql-driver/mysql" // 记得导入驱动
+	"github.com/openai/openai-go"
 )
 
 type Exec int
@@ -94,7 +96,7 @@ func (dbS *DbService) CompleteTaskWithLog(task *Task) error {
 		return nil // 幂等跳过
 	}
 	// 操作1：更新任务状态
-	_, err = tx.Exec("UPDATE tasks SET status = 'done', result = ? WHERE id = ?", task.Prompt, task.ID)
+	_, err = tx.Exec("UPDATE tasks SET status = 'done', result = ? WHERE id = ?", task.Result, task.ID)
 	if err != nil {
 		return err
 	}
@@ -109,7 +111,7 @@ func (dbS *DbService) CompleteTaskWithLog(task *Task) error {
 }
 
 func (dbS *DbService) InsertTask(task *Task) error {
-	_, err := dbS.GetdbInstance().Exec("insert into tasks (id, status, result, created_at) values (?, ?, ?, now())", task.ID, task.Status, task.Result)
+	_, err := dbS.GetdbInstance().Exec("insert into tasks (id, status, result, created_at, conversation_id) values (?, ?, ?, now(), ?)", task.ID, task.Status, task.Result, task.ConversationID)
 	return err
 }
 
@@ -117,4 +119,54 @@ func (dbS *DbService) GetTask(taskID string) (Task, error) {
 	var task Task
 	err := dbS.GetdbInstance().QueryRow("select id, status, result from tasks where id = ?", taskID).Scan(&task.ID, &task.Status, &task.Result)
 	return task, err
+}
+
+func (dbS *DbService) InsertConversation() (string, error) {
+
+	id := fmt.Sprintf("%d", time.Now().UnixNano()) // 简单 ID，生产环境建议 uuid
+	now := time.Now()
+	_, err := dbS.GetdbInstance().Exec("INSERT INTO conversations (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)", id, "新对话", now, now)
+	return id, err
+}
+
+func (dbS *DbService) QueryConversation() (any, error) {
+
+	rows, err := dbS.GetdbInstance().Query("SELECT id, title, updated_at FROM conversations ORDER BY updated_at DESC")
+
+	if err != nil { /* 错误处理 */
+	}
+	defer rows.Close()
+	var convs []map[string]interface{}
+	for rows.Next() {
+		var id, title string
+		var updated time.Time
+		rows.Scan(&id, &title, &updated)
+		convs = append(convs, map[string]interface{}{
+			"id": id, "title": title, "updated_at": updated,
+		})
+	}
+	return convs, rows.Err()
+}
+
+func (dbS *DbService) QueryHistory(convID string) []openai.ChatCompletionMessageParamUnion {
+	rows, _ := dbS.GetdbInstance().Query("SELECT role, content FROM messages WHERE conversation_id = ? ORDER BY created_at ASC LIMIT 20", convID)
+	var history []openai.ChatCompletionMessageParamUnion
+	for rows.Next() {
+		var role, content string
+		rows.Scan(&role, &content)
+		switch role {
+		case "user":
+			history = append(history, openai.UserMessage(content))
+		case "assistant":
+			history = append(history, openai.AssistantMessage(content))
+		case "system":
+			history = append(history, openai.SystemMessage(content))
+		}
+	}
+
+	if err := rows.Err(); err != nil {
+		log.Printf("遍历历史消息出错: %v", err)
+		return nil // 或其他错误处理
+	}
+	return history
 }

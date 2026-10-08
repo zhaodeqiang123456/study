@@ -1,1 +1,15 @@
+<<<<<<< HEAD
 
+=======
+.gitignore
+.env
+.claude
+conversations
+storage
+*.exe
+scripts
+dump.rdb
+.qdrant-initialized
+*.log
+.tools
+>>>>>>> 9acd68fc05047e86bc1a9cda627aed2f192f24e9
